@@ -1,0 +1,10 @@
+# Results logs and per-arm server output.
+results/_logs/
+
+# Referee-only: gate 3 prompts are generated per verification, never stored, but
+# keep any local scratch out of the repo anyway.
+targets/*/goldens/
+
+__pycache__/
+*.pyc
+.DS_Store
