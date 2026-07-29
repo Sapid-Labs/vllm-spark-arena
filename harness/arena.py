@@ -582,7 +582,12 @@ def cmd_warm(args):
         for p in prompts:
             t0 = time.perf_counter()
             try:
-                srv.complete(p["text"], min(p["maxTokens"], 16))
+                # FULL maxTokens, not a truncated probe. Kernels compile per
+                # shape, and the shapes a long prompt reaches at token 160 are
+                # not the ones it reaches at token 16 -- a 16-token warm pass
+                # returned in 1.7 s and the measured arm still ate six JIT
+                # events and died. Warm exactly what will be measured.
+                srv.complete(p["text"], p["maxTokens"])
                 Out.ok(f"{p['id']:<16} warmed in {time.perf_counter()-t0:6.1f}s")
             except Exception as e:
                 # A hang here is the JIT doing its work. Report and continue --
