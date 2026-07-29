@@ -355,15 +355,24 @@ class Server:
         # patchRequired is part of the BASELINE, not a submission: this target
         # does not serve at all without it, so both arms carry it and it can
         # never be someone's win. The candidate patch stacks on top.
+        chain = []
         for name in [self.target.get("patchRequired"), self.patch]:
             if not name:
                 continue
             d = ROOT / "patches" / name
             if not (d / "sitecustomize.py").exists():
                 die(f"patch '{name}' has no sitecustomize.py at {d}")
-            # PYTHONPATH, not an import hook: this must apply at interpreter
-            # startup so it reaches the engine and worker processes vLLM spawns.
-            env["PYTHONPATH"] = str(d) + (":" + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+            chain.append(str(d))
+        if chain:
+            # NOT the patch dirs themselves: Python imports sitecustomize once,
+            # from the FIRST directory on the path, so listing two of them
+            # silently discards one. harness/patchchain runs them all, in order.
+            # PYTHONPATH rather than an import hook because this must apply at
+            # interpreter startup, to reach the engine and worker processes
+            # vLLM spawns -- and on a clustered target, on every node.
+            env["ARENA_PATCH_CHAIN"] = os.pathsep.join(chain)
+            loader = str(ROOT / "harness" / "patchchain")
+            env["PYTHONPATH"] = loader + (":" + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
         return env
 
     def _argv(self):
@@ -383,7 +392,8 @@ class Server:
         self.cluster = None
         if self.target.get("cluster"):
             passthrough = {k: env[k] for k in
-                           ("PATH", "VLLM_CACHE_ROOT", "PYTHONPATH", "NCCL_DEBUG",
+                           ("PATH", "VLLM_CACHE_ROOT", "PYTHONPATH", "ARENA_PATCH_CHAIN",
+                            "NCCL_DEBUG",
                             "NCCL_DEBUG_SUBSYS", "VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS",
                             "RAY_local_fs_capacity_threshold", "RAY_memory_monitor_refresh_ms")
                            if k in env}
