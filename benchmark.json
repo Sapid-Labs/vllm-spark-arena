@@ -91,7 +91,11 @@
       "metric": "nvidia-smi --query-gpu=temperature.gpu",
       "maxStartTempC": 46,
       "maxWaitSeconds": 900,
-      "note": "The Spark idles ~43 C and a measured arm heats it ~10 C, repeatably. mlxfast's fixed 40 C is unreachable here."
+      "mode": "relative-to-idle-floor",
+      "toleranceC": 3,
+      "note": "The Spark idles ~43 C and a measured arm heats it ~10 C, repeatably. mlxfast's fixed 40 C is unreachable here.",
+      "whyRelative": "An absolute ceiling assumes a fixed idle floor and the floor drifts. Measured 2026-07-29: the same node, verifiably idle, sat at 52 C while nvidia-smi ALSO falsely claimed 96% utilisation -- a 46 C ceiling taken from yesterday's 43 C idle then waits forever. maxStartTempC is kept only as the fallback when nvidia-smi reports no temperature at all.",
+      "multiNode": "Runs on EVERY node before an arm starts. One hot worker makes a paired ratio meaningless, and it is the node nobody is watching."
     },
     "multiNode": {
       "supported": true,

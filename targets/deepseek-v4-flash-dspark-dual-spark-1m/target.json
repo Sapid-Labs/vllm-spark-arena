@@ -70,5 +70,60 @@
       "PYTHONPATH": "<arena>/patches/flashinfer-dsv4-pbs256"
     }
   },
-  "model": "~/models/hf/DeepSeek-V4-Flash"
+  "model": "~/models/hf/DeepSeek-V4-Flash",
+  "servedModelName": "dsv4",
+  "port": 8000,
+  "seed": 0,
+  "defaultMaxTokens": 256,
+  "promptSettings": {
+    "d-doc-8k": { "maxTokens": 128 }
+  },
+  "promptSettingsNote": "d-doc-8k is ~7.7k tokens and --max-model-len is 8192, so its output budget has to be small enough to fit. A request that overruns the context aborts the arm.",
+  "startupTimeout": 1800,
+  "cacheRoot": "~/.cache/vllm-dsv4",
+  "patchRequired": "flashinfer-dsv4-pbs256",
+  "patchNote": "This target does not run at all without the overlay: the stock DSv4 decode kernel is instantiated only at PAGE_BLOCK_SIZE 64, and the model needs 256. The overlay is therefore part of the BASELINE here, not a candidate -- both arms carry it.",
+  "cluster": {
+    "nodes": 2,
+    "nic": "enp1s0f1np1",
+    "requireRdma": true,
+    "head": { "ip": "192.168.100.1" },
+    "workers": [{ "host": "192.168.0.28", "ip": "192.168.100.2" }],
+    "hostNote": "workers[].host is a LAN address reached over real OpenSSH. It must NOT be a tailnet address: tailscaled terminates the session itself and never runs pam_limits, so every raylet would inherit an 8 MB memlock and NCCL would fall back to TCP sockets without saying so.",
+    "preflight": [
+      {
+        "name": "sparse-mla-sm120",
+        "python": "from vllm.utils.flashinfer import has_flashinfer_sparse_mla_sm120 as f; print(f())",
+        "expect": "True",
+        "hint": "Almost always nvcc missing from PATH -- vLLM's has_flashinfer() is False without it because FlashInfer JITs, and the error then names the sparse MLA API, which is present and working. Check /usr/local/cuda/bin is on PATH and that the venv's bin (ninja) is still on it."
+      }
+    ]
+  },
+  "serveArgs": [
+    "--served-model-name", "dsv4",
+    "--distributed-executor-backend", "ray",
+    "--tensor-parallel-size", "2",
+    "--block-size", "256",
+    "--kv-cache-dtype", "fp8",
+    "--max-model-len", "8192",
+    "--gpu-memory-utilization", "0.70",
+    "--kv-cache-memory-bytes", "6442450944",
+    "--max-num-seqs", "1",
+    "--max-num-batched-tokens", "8192",
+    "--trust-remote-code"
+  ],
+  "serveArgsNote": "--max-num-seqs 1 is mandatory: batching breaks token identity on this part (n=2 -> 2 distinct outputs), and the whole cheap gate rests on greedy determinism. --max-model-len is 8192, NOT the recipe's 1M -- the KV pin that clears the oom-guard does not leave room for it, and a target that cannot finish an arm cannot rank anything. A 1M-context variant is its own target.",
+  "env": {
+    "RAY_local_fs_capacity_threshold": "1",
+    "RAY_memory_monitor_refresh_ms": "0",
+    "VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS": "900",
+    "NCCL_DEBUG": "INFO",
+    "NCCL_DEBUG_SUBSYS": "INIT,NET"
+  },
+  "weights": {
+    "hfRepo": "deepseek-ai/DeepSeek-V4-Flash",
+    "public": true,
+    "sizeBytes": 238370000000,
+    "note": "222 GB on disk. Public and ungated, so it satisfies policy.publicWeights -- but it is the largest entry cost in either arena, and it must be present on BOTH nodes."
+  }
 }

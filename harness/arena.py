@@ -149,32 +149,189 @@ def model_fingerprint(target, full=False):
 
 # -------------------------------------------------------------------- thermal
 
-def gpu(metric):
+def sh(cmd, host=None, timeout=120, check=False):
+    """Run a shell command locally or on another node.
+
+    ALWAYS over OpenSSH, never a Tailscale SSH session: tailscaled terminates
+    the session itself and never runs PAM, so pam_limits never fires and every
+    child keeps systemd's 8 MB memlock. Ray workers inherit that, and NCCL then
+    silently falls back to TCP sockets even when the root memlock fix is applied
+    correctly. `ssh localhost` is used for the local node for the same reason.
+    """
+    argv = (["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new",
+             host or "localhost", cmd] if host is not None or True else ["bash", "-lc", cmd])
+    r = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+    if check and r.returncode != 0:
+        die(f"[{host or 'localhost'}] failed: {cmd}\n{r.stdout}\n{r.stderr}")
+    return r.stdout.strip()
+
+
+def gpu(metric, host=None):
     try:
-        return float(subprocess.run(
-            ["nvidia-smi", f"--query-gpu={metric}", "--format=csv,noheader,nounits"],
-            capture_output=True, text=True, timeout=15, check=True).stdout.split("\n")[0])
+        cmd = f"nvidia-smi --query-gpu={metric} --format=csv,noheader,nounits"
+        if host is None:
+            out = subprocess.run(cmd.split(), capture_output=True, text=True,
+                                 timeout=15, check=True).stdout
+        else:
+            out = sh(cmd, host=host, timeout=30)
+        return float(out.split("\n")[0])
     except Exception:
         return None
 
 
-def thermal_gate():
+def thermal_gate(hosts=(None,)):
+    """Every node starts an arm from the same thermal state.
+
+    Relative to a per-run idle floor, not an absolute ceiling. Measured
+    2026-07-29: the same node, verifiably idle, sat at 52 C while nvidia-smi
+    also falsely reported 96% utilisation -- a 46 C ceiling taken from
+    yesterday's 43 C idle then waits forever. The requirement was never an
+    absolute number, only that the arms are comparable.
+
+    On a cluster this runs on EVERY node. One hot worker makes a paired ratio
+    meaningless, and it is the node nobody is watching.
+    """
     cfg = CONTRACT["measurement"]["thermalGate"]
-    ceiling, budget = cfg["maxStartTempC"], cfg["maxWaitSeconds"]
-    t = gpu("temperature.gpu")
-    if t is None:
-        Out.warn("no nvidia-smi temperature — thermal gate skipped, results advisory")
-        return None
-    waited = 0
-    while t > ceiling and waited < budget:
-        Out.info(f"thermal gate: {t:.0f} C > {ceiling} C, waiting ({waited}s/{budget}s)")
-        time.sleep(20)
-        waited += 20
-        t = gpu("temperature.gpu")
-    if t > ceiling:
-        die(f"thermal gate never cleared: {t:.0f} C after {budget}s")
-    Out.info(f"thermal gate: {t:.0f} C (ceiling {ceiling} C)")
-    return t
+    budget = cfg["maxWaitSeconds"]
+    tol = cfg.get("toleranceC", 3)
+    temps = {}
+    for h in hosts:
+        label = h or "head"
+        t = gpu("temperature.gpu", host=h)
+        if t is None:
+            Out.warn(f"{label}: no nvidia-smi temperature — thermal gate skipped, advisory")
+            continue
+        floor = min([gpu("temperature.gpu", host=h) or t for _ in range(3)] + [t])
+        ceiling = floor + tol
+        waited = 0
+        while t > ceiling and waited < budget:
+            Out.info(f"thermal gate [{label}]: {t:.0f} C > {ceiling:.0f} C "
+                     f"(floor {floor:.0f}), waiting ({waited}s/{budget}s)")
+            time.sleep(20)
+            waited += 20
+            t = gpu("temperature.gpu", host=h)
+        if t > ceiling:
+            die(f"thermal gate [{label}] never cleared: {t:.0f} C > {ceiling:.0f} C after {budget}s")
+        Out.info(f"thermal gate [{label}]: {t:.0f} C (floor {floor:.0f} + {tol})")
+        temps[label] = t
+    return temps.get("head")
+
+
+# -------------------------------------------------------------------- cluster
+
+class Cluster:
+    """A Ray cluster across N Sparks, for targets that declare `cluster`.
+
+    Every precondition is asserted BEFORE the model loads. On this target that
+    is 222 GB and about four minutes, and each of the failures below produced a
+    misleading symptom that pointed somewhere else:
+
+      memlock 8 MB   -> NCCL silently uses TCP sockets; it still serves, and the
+                        paired ratio is then measured on the wrong interconnect.
+      hostname->lo   -> Gloo binds 127.0.0.1 and the peer gets 'connection
+                        refused', which reads as an interconnect fault.
+      nvcc off PATH  -> vLLM reports the DSv4 decode kernel missing, naming a
+                        component that is present and working.
+      stale raylet   -> `ray start` ATTACHES to the survivor and inherits its
+                        environment, manufacturing bugs that are not there.
+    """
+
+    def __init__(self, target, env_extra):
+        c = target["cluster"]
+        self.cfg = c
+        self.nic = c.get("nic")
+        self.head_ip = c["head"]["ip"]
+        self.workers = c.get("workers", [])
+        self.hosts = [None] + [w["host"] for w in self.workers]   # None == head
+        self.ray = str(VENV / "bin" / "ray")
+        self.env_extra = env_extra
+        self.expect_gpus = c.get("nodes", 1 + len(self.workers))
+
+    def _env_str(self, host_ip):
+        env = dict(self.env_extra)
+        env["VLLM_HOST_IP"] = host_ip
+        if self.nic:
+            env.setdefault("NCCL_SOCKET_IFNAME", self.nic)
+            env.setdefault("GLOO_SOCKET_IFNAME", self.nic)
+        return " ".join(f"{k}={v}" for k, v in env.items())
+
+    def _ips(self):
+        return [self.head_ip] + [w["ip"] for w in self.workers]
+
+    def teardown(self):
+        for h in self.hosts:
+            # [r]aylet character class: an unguarded pattern matches the ssh
+            # command line running it and kills the session mid-teardown.
+            sh(f"{self.ray} stop --force >/dev/null 2>&1; "
+               f"pkill -9 -f '[r]aylet --' 2>/dev/null; "
+               f"pkill -9 -f '[g]cs_server' 2>/dev/null; true", host=h, timeout=180)
+        time.sleep(5)
+        for h in self.hosts:
+            # pgrep -c prints 0 AND exits non-zero, so `|| echo 0` gives "0\n0".
+            n = sh("pgrep -cf '[r]aylet --'", host=h) or "0"
+            if n.split("\n")[0].strip() not in ("0", ""):
+                die(f"[{h or 'head'}] {n} raylet(s) survived teardown. `ray start` would "
+                    f"ATTACH to the survivor and inherit its environment.")
+
+    def preflight(self):
+        for h, ip in zip(self.hosts, self._ips()):
+            label = h or "head"
+            ml = sh("ulimit -l", host=h)
+            if ml != "unlimited":
+                die(f"[{label}] memlock is {ml}, not unlimited. NCCL cannot use RDMA and "
+                    f"will fall back to TCP sockets without saying so. Fix limits.d, and "
+                    f"check you are not reading this through a Tailscale SSH session — "
+                    f"tailscaled runs no PAM, so it always reports the 8 MB default.")
+            Out.info(f"[{label}] memlock unlimited, ip {ip}")
+        for probe in self.cfg.get("preflight", []):
+            for h in self.hosts:
+                label = h or "head"
+                got = sh(f"env {self._env_str(self.head_ip)} {VENV}/bin/python -c "
+                         f"\"{probe['python']}\"", host=h, timeout=300)
+                got = (got.split("\n")[-1] if got else "").strip()
+                if got != str(probe["expect"]):
+                    die(f"[{label}] preflight '{probe['name']}' returned {got!r}, "
+                        f"expected {probe['expect']!r}.\n    {probe.get('hint', '')}")
+                Out.info(f"[{label}] preflight {probe['name']} = {got}")
+
+    def start(self):
+        self.teardown()
+        self.preflight()
+        Out.info(f"ray head on {self.head_ip}")
+        sh(f"env {self._env_str(self.head_ip)} {self.ray} start --head "
+           f"--node-ip-address={self.head_ip} --port=6379 --num-gpus=1 --disable-usage-stats",
+           host=None, timeout=300, check=True)
+        time.sleep(5)
+        for w in self.workers:
+            Out.info(f"ray worker {w['ip']} via {w['host']}")
+            sh(f"env {self._env_str(w['ip'])} {self.ray} start --address={self.head_ip}:6379 "
+               f"--node-ip-address={w['ip']} --num-gpus=1",
+               host=w["host"], timeout=300, check=True)
+        time.sleep(8)
+        got = sh(f"env {self._env_str(self.head_ip)} {VENV}/bin/python -c "
+                 f"\"import ray; ray.init(address='{self.head_ip}:6379'); "
+                 f"print(int(ray.cluster_resources().get('GPU',0)))\"", timeout=300)
+        got = (got.split("\n")[-1] if got else "").strip()
+        if got != str(self.expect_gpus):
+            die(f"ray sees {got} GPU(s), expected {self.expect_gpus}. A cluster that came "
+                f"up short produces a plausible number from the wrong hardware, which is "
+                f"worse than an error.")
+        Out.ok(f"cluster up: {self.expect_gpus} GPUs across {len(self.hosts)} node(s)")
+
+    def assert_transport(self, log_path):
+        """RDMA or sockets? The fallback is silent and it still serves."""
+        if not self.cfg.get("requireRdma", True):
+            return
+        text = Path(log_path).read_text(errors="ignore")
+        if "NET/IB" in text:
+            dev = [l for l in text.splitlines() if "Made virtual device" in l]
+            Out.ok("NCCL transport = IB/RoCE" + (f"  ({dev[0].split('NET/IB')[-1].strip()[:60]})" if dev else ""))
+        elif "NET/Socket" in text:
+            die("NCCL fell back to TCP SOCKETS. It serves, but this is not the recipe's "
+                "interconnect and a paired ratio measured over it is not this hardware.")
+        else:
+            Out.warn("could not determine NCCL transport from the serve log "
+                     "(set NCCL_DEBUG=INFO in the target env to make this checkable)")
 
 
 # --------------------------------------------------------------------- server
@@ -195,10 +352,15 @@ class Server:
             self.target.get("cacheRoot", "~/.cache/vllm-arena"))
         for k, v in (self.target.get("env") or {}).items():
             env[k] = os.path.expanduser(str(v))
-        if self.patch:
-            d = ROOT / "patches" / self.patch
+        # patchRequired is part of the BASELINE, not a submission: this target
+        # does not serve at all without it, so both arms carry it and it can
+        # never be someone's win. The candidate patch stacks on top.
+        for name in [self.target.get("patchRequired"), self.patch]:
+            if not name:
+                continue
+            d = ROOT / "patches" / name
             if not (d / "sitecustomize.py").exists():
-                die(f"patch '{self.patch}' has no sitecustomize.py at {d}")
+                die(f"patch '{name}' has no sitecustomize.py at {d}")
             # PYTHONPATH, not an import hook: this must apply at interpreter
             # startup so it reaches the engine and worker processes vLLM spawns.
             env["PYTHONPATH"] = str(d) + (":" + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
@@ -214,9 +376,23 @@ class Server:
         argv = self._argv()
         Out.info("serve: " + " ".join(argv)
                  + (f"   [patch {self.patch}]" if self.patch else "   [baseline]"))
+        env = self._env()
+        # A clustered target brings its Ray cluster up per arm, not once per
+        # session: an arm must not inherit the previous arm's raylets, which is
+        # how a candidate tree silently gets measured against itself.
+        self.cluster = None
+        if self.target.get("cluster"):
+            passthrough = {k: env[k] for k in
+                           ("PATH", "VLLM_CACHE_ROOT", "PYTHONPATH", "NCCL_DEBUG",
+                            "NCCL_DEBUG_SUBSYS", "VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS",
+                            "RAY_local_fs_capacity_threshold", "RAY_memory_monitor_refresh_ms")
+                           if k in env}
+            self.cluster = Cluster(self.target, passthrough)
+            self.cluster.start()
+            env["VLLM_HOST_IP"] = self.cluster.head_ip
         self.log = open(self.log_path, "w")
         self.proc = subprocess.Popen(argv, stdout=self.log, stderr=subprocess.STDOUT,
-                                     env=self._env(), start_new_session=True)
+                                     env=env, start_new_session=True)
         deadline = time.time() + self.target.get("startupTimeout", 1800)
         while time.time() < deadline:
             if self.proc.poll() is not None:
@@ -231,6 +407,8 @@ class Server:
         else:
             self.__exit__(None, None, None)
             die("vllm serve never became healthy")
+        if self.cluster:
+            self.cluster.assert_transport(self.log_path)
         return self
 
     def __exit__(self, *exc):
@@ -246,6 +424,8 @@ class Server:
             self.log.close()
         except Exception:
             pass
+        if getattr(self, "cluster", None):
+            self.cluster.teardown()
         return False
 
     def complete(self, prompt, max_tokens):
@@ -296,7 +476,11 @@ class Server:
 
 def run_arm(target, patch, prompts, label, tag):
     Out.step(f"arm: {label}")
-    temp0 = thermal_gate()
+    # Gate every node, not just the head. One hot worker is enough to make a
+    # paired ratio meaningless, and it is the node nobody is watching.
+    c = target.get("cluster")
+    hosts = tuple([None] + [w["host"] for w in c.get("workers", [])]) if c else (None,)
+    temp0 = thermal_gate(hosts)
     logs = ROOT / "results" / "_logs"
     logs.mkdir(parents=True, exist_ok=True)
     with Server(target, patch, logs / f"{target['_slug']}-{tag}.log") as srv:
@@ -365,6 +549,49 @@ def generate_heldout(target, seed_hex, count):
 
 
 # ------------------------------------------------------------------- commands
+
+def cmd_warm(args):
+    """Land every prompt shape's JIT in the on-disk cache before measuring.
+
+    Some kernels (TileLang, Triton) compile the first time they see a shape. On
+    a single node that is a latency spike; under TP it is fatal, because one
+    rank compiles while the other waits on the collective and the engine dies on
+    VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS. Measured 2026-07-29: a baseline arm
+    survived two prompts, hit `mhc_pre_big_fuse_with_norm_tilelang` on the
+    third, and hung for the full 900 s.
+
+    The one-request warmup in the measurement contract does not help -- it warms
+    ONE shape. This warms every shape the target will actually measure, with a
+    generous timeout, and throws the results away. The caches are per node and
+    they drift, so both ranks compiling here is the point.
+
+    Not a measurement: nothing it produces is recorded, and it is deliberately a
+    separate command so that a run which needed warming is visible as a run that
+    needed warming.
+    """
+    target = load_target(args.target)
+    prompts = prompt_set(target)
+    target = dict(target)
+    target["requestTimeout"] = args.timeout
+    target.setdefault("env", {})
+    target["env"] = {**target["env"], "VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS": str(args.timeout)}
+    Out.step(f"warm: {target['_slug']} — {len(prompts)} shape(s), timeout {args.timeout}s")
+    logs = ROOT / "results" / "_logs"
+    logs.mkdir(parents=True, exist_ok=True)
+    with Server(target, args.patch, logs / f"{target['_slug']}-warm.log") as srv:
+        for p in prompts:
+            t0 = time.perf_counter()
+            try:
+                srv.complete(p["text"], min(p["maxTokens"], 16))
+                Out.ok(f"{p['id']:<16} warmed in {time.perf_counter()-t0:6.1f}s")
+            except Exception as e:
+                # A hang here is the JIT doing its work. Report and continue --
+                # the compile still lands in the cache, which is the whole point.
+                Out.warn(f"{p['id']:<16} failed after {time.perf_counter()-t0:6.1f}s "
+                         f"({type(e).__name__}) — compiles may still have cached")
+    Out.step("warm pass done. Re-run it; every shape should now return in seconds. "
+             "If one still stalls, it is not a cold cache.")
+
 
 def cmd_baseline(args):
     target = load_target(args.target)
@@ -839,6 +1066,15 @@ def main():
                    help="keep boot 0 (only correct if VLLM_CACHE_ROOT is already warm)")
     b.set_defaults(discard_first=True)
     b.set_defaults(fn=cmd_baseline)
+
+    w = sub.add_parser("warm", help="compile every prompt shape's kernels into the "
+                                    "on-disk cache; required before baselining a TP target")
+    w.add_argument("--target", required=True)
+    w.add_argument("--patch", default=None)
+    w.add_argument("--timeout", type=int, default=3600,
+                   help="per-request timeout; generous on purpose, a cold TileLang "
+                        "compile under TP can take minutes and must not be killed")
+    w.set_defaults(fn=cmd_warm)
 
     n = sub.add_parser("bench", help="paired patched-vs-baseline run with gates 1, 2, 4")
     n.add_argument("--target", required=True)
