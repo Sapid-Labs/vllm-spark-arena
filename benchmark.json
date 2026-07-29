@@ -94,8 +94,27 @@
       "note": "The Spark idles ~43 C and a measured arm heats it ~10 C, repeatably. mlxfast's fixed 40 C is unreachable here."
     },
     "multiNode": {
-      "supported": false,
-      "why": "Not yet. Whether greedy token identity survives an NCCL allreduce is UNMEASURED -- two attempts on 2026-07-28 died on 'RPC call to sample_tokens timed out' before producing an answer, for reasons unrelated to determinism. Until that is settled no TP target can be ranked, because the cheap gate would be comparing across a collective whose reduction order is not known to be stable.",
+      "supported": true,
+      "why": "Greedy token identity DOES survive the NCCL collective. Measured 2026-07-29 on DeepSeek-V4-Flash, TP2 across two Sparks: two separate boots, same pinned config, warmup discarded, 4/4 prompts byte-identical. This is the property the whole cheap gate rests on for any clustered target -- and it is a property of the collective, not of a model, so one measurement settles it for every multi-node target here.",
+      "measurement": {
+        "on": "2026-07-29",
+        "target": "deepseek-v4-flash-dspark-dual-spark-1m",
+        "boots": 2,
+        "prompts": 4,
+        "identical": "4/4",
+        "transport": "NCCL over RoCE (NET/IB, 2 virtual devices at 200 Gb/s), NOT sockets",
+        "config": "TP2 ray, --block-size 256, --kv-cache-dtype fp8, --max-model-len 8192, --max-num-seqs 1, --gpu-memory-utilization 0.70, --kv-cache-memory-bytes 6442450944",
+        "scope": "Two boots at 8192 context, not 1M, and not across a reboot of either node. Enough to stop treating multi-node as unrankable; NOT enough to skip the per-prompt stability screening the baseline command already does.",
+        "script": "harness/multinode_determinism.sh"
+      },
+      "requirements": [
+        "Launch the cluster over real OpenSSH, never a Tailscale SSH session. tailscaled does not run PAM, so pam_limits never fires and every raylet inherits memlock=8MB, which silently forces NCCL onto TCP sockets even when the root memlock fix is correctly applied. Assert `ulimit -l` is unlimited on EVERY node from inside the launch script.",
+        "Assert NCCL actually chose NET/IB and not NET/Socket. The socket fallback is silent, it still serves, and a paired ratio measured over sockets is not the recipe's hardware.",
+        "Pin VLLM_HOST_IP per node. /etc/hosts on this fleet maps each hostname to 127.0.0.1 BEFORE its ConnectX address, so anything resolving its own hostname binds loopback and the peer gets 'connection refused' to 127.0.0.1 -- which reads like an interconnect fault and is not one.",
+        "Put /usr/local/cuda/bin AND the venv's bin on PATH, by PREPENDING to the inherited PATH. FlashInfer JITs its kernels, so vLLM's has_flashinfer() is False without nvcc and the DSv4 decode kernel disappears; the build then shells out to ninja, which lives in the venv.",
+        "Every node passes the thermal gate and is verified idle before an arm starts -- the worker is where somebody else's job hides.",
+        "The candidate tree is synced to every node before its arm. A worker still on the base build measures a mixed cluster and produces a plausible number rather than an error."
+      ],
       "intent": "Multi-node IS in scope for this arena -- plenty of Spark owners have two or more, and the clustered recipes are the ones that most need kernel help."
     }
   },

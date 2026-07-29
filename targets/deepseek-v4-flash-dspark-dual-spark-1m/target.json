@@ -3,21 +3,26 @@
   "name": "DeepSeek V4 Flash DSpark \u2014 dual Spark, 1M context",
   "recipe": "deepseek-v4-flash-dspark-dual-spark-1m",
   "recipeUrl": "https://howtospark.com/recipes/deepseek-v4-flash-dspark-dual-spark-1m",
-  "status": "blocked",
-  "statusNote": "Runs now, but is not yet rankable. The engine blocker is GONE: this recipe served on stock vLLM 0.26.0 at --block-size 256 on 2026-07-28 via the flashinfer overlay (patches/flashinfer-dsv4-pbs256). What remains is the measurement contract, not the engine.",
+  "status": "open",
+  "statusNote": "Unblocked 2026-07-29, not yet baselined. Both hard blockers are gone: the engine serves on stock vLLM 0.26.0 at --block-size 256 via the flashinfer overlay, and multi-node greedy determinism is now MEASURED rather than assumed. What remains is to record a baseline.",
   "blockers": [
     {
       "id": "multi-node-determinism",
       "severity": "hard",
-      "what": "Whether greedy token identity survives an NCCL allreduce is still unmeasured. Now that the model actually serves, this is finally MEASURABLE on this target rather than theoretical \u2014 boot it twice under the pinned config and compare hashes.",
-      "sharedWith": "glm-5-2-dual-spark-tp2 and every other dual-Spark recipe.",
-      "nextStep": "Run the arena baseline against this target once multiNode is enabled in the contract."
+      "resolved": "2026-07-29",
+      "what": "Whether greedy token identity survives an NCCL allreduce was unmeasured, and no TP target could be ranked until it was settled.",
+      "answer": "It survives. Two boots, TP2 across two Sparks, NCCL over RoCE, warmup discarded: 4/4 prompts byte-identical (see results/_multinode/determinism-2026-07-29.txt). Neither boot hung, which also supports the standing theory that the 07-28 hangs were the TCP-socket fallback rather than a kernel fault.",
+      "sharedWith": "glm-5-2-dual-spark-tp2 and every other dual-Spark recipe \u2014 this is a property of the collective, not of a model.",
+      "scope": "Two boots at 8192 context, one config, four prompts. Enough to make multi-node rankable; the baseline's per-prompt stability screening still applies.",
+      "nextStep": "Record the arena baseline."
     },
     {
       "id": "memlock-8mb",
       "severity": "soft",
-      "what": "ulimit -l is 8 MB on both nodes, so NCCL cannot use RDMA and falls back to sockets. It serves, but the interconnect is not running as the recipe intends, and a paired ratio measured over sockets is not the recipe's hardware.",
-      "nextStep": "Root, once: raise memlock, then drop NCCL_IB_DISABLE=1."
+      "resolved": "2026-07-29",
+      "what": "ulimit -l was 8 MB on both nodes, so NCCL could not use RDMA and fell back to TCP sockets. A paired ratio measured over sockets is not the recipe's hardware.",
+      "howFixed": "limits.d memlock unlimited on both nodes, verified as unlimited in the launch path itself rather than in a shell.",
+      "trap": "The fix READ as failed for a day. Tailscale SSH terminates inside tailscaled and never runs pam_limits, so any ulimit taken over the tailnet reports systemd's 8 MB default no matter what limits.d says. Ray workers inherit whatever launched them, so a cluster started from a tailnet session gets 8 MB memlock on every raylet and NCCL silently falls back to sockets EVEN WITH THE ROOT FIX APPLIED. Launch the head via `ssh localhost` and the worker over its LAN address, and assert unlimited on both inside the script."
     },
     {
       "id": "oom-guard-headroom",

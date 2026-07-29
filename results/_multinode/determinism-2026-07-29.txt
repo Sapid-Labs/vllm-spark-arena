@@ -1,0 +1,33 @@
+[12:20:26] === BOOT 1 ===
+[12:20:26] teardown
+[12:20:35] surviving raylets: head=0 worker=0
+[12:20:35] boot 1: memlock head=unlimited worker=unlimited
+[12:21:11] boot 1: ray sees 2 GPU(s)
+[12:21:14] boot 1: sparse MLA sm120 available on head = True
+[12:21:17] boot 1: sparse MLA sm120 available on worker = True
+[12:24:37] boot 1: healthy
+[12:24:37] boot 1: NCCL transport = IB/RoCE  NET/IB:
+warmup ok (discarded)
+a-capital	5dd272b4f316b776	5
+b-code	65b8eebd47f14735	236
+c-prose	fbc93be7e437075c	517
+d-math	832bf73fe3cfd4ca	361
+[12:24:51] teardown
+[12:25:02] surviving raylets: head=0 worker=0
+[12:25:02] === BOOT 2 ===
+[12:25:02] teardown
+[12:25:09] surviving raylets: head=0 worker=0
+[12:25:09] boot 2: memlock head=unlimited worker=unlimited
+[12:25:43] boot 2: ray sees 2 GPU(s)
+[12:25:46] boot 2: sparse MLA sm120 available on head = True
+[12:25:49] boot 2: sparse MLA sm120 available on worker = True
+[12:29:09] boot 2: healthy
+[12:29:09] boot 2: NCCL transport = IB/RoCE  NET/IB:
+warmup ok (discarded)
+a-capital	5dd272b4f316b776	5
+b-code	65b8eebd47f14735	236
+c-prose	fbc93be7e437075c	517
+d-math	832bf73fe3cfd4ca	361
+[12:29:20] teardown
+[12:29:31] surviving raylets: head=0 worker=0
+IDENTICAL across boots — TP2 greedy output survived the NCCL collective
