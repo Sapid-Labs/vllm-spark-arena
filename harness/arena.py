@@ -581,6 +581,237 @@ def cmd_heldout(args):
     sys.exit(0 if passed else 1)
 
 
+# ------------------------------------------------------------- leaderboard
+
+def leaderboard_path(target):
+    return ROOT / "results" / target["_slug"] / "leaderboard.json"
+
+
+def load_leaderboard(target, create=False):
+    """The ordered promotion chain for one target.
+
+    This file, not results/*.json, is what a frontier chart is drawn from. A
+    bench record says "x1.04 against whatever the incumbent was that day";
+    only an ordered chain can say "x1.31 against the original baseline", and
+    that chain cannot be reconstructed after the fact -- which is why it is
+    written from the first promotion rather than added once there is something
+    to plot.
+    """
+    path = leaderboard_path(target)
+    if path.exists():
+        return json.loads(path.read_text())
+    if not create:
+        die(f"no leaderboard for {target['_slug']} -- run `promote` on a passing record first")
+    base_path = target["_dir"] / "baseline.json"
+    if not base_path.exists():
+        die(f"no baseline.json for {target['_slug']} -- run `baseline` first")
+    base = json.loads(base_path.read_text())
+    return {
+        "contractVersion": CONTRACT["contractVersion"],
+        "target": target["_slug"],
+        "targetName": target.get("name", target["_slug"]),
+        "recipe": target.get("recipe"),
+        "engine": "vllm",
+        "hardware": CONTRACT["hardware"]["name"],
+        "vendorPin": f"vllm {CONTRACT['substrate']['wheel']['version']}",
+        "repoUrl": CONTRACT.get("repoUrl"),
+        "origin": {
+            "recordedAt": base["recordedAt"],
+            "node": base["node"],
+            "buildInfo": base.get("wheel"),
+            "decodeTps": base["decodeTps"],
+            "prefillTps": base["prefillTps"],
+            "note": "The frontier is measured against THIS. Every cumulative "
+                    "number on the chart is a product of paired ratios back to here.",
+        },
+        "current": {
+            "decodeTps": base["decodeTps"],
+            "prefillTps": base["prefillTps"],
+            "cumulativeDecodeSpeedup": 1.0,
+            "cumulativePrefillSpeedup": 1.0,
+            "cumulativeScore": 1.0,
+            "promotionCount": 0,
+        },
+        "promotions": [],
+    }
+
+
+def cmd_promote(args):
+    """Promote a passing bench record onto the frontier.
+
+    Deliberately a separate step from `bench`. Gate 3 (held-out prompts) and
+    gate 5 (beat the incumbent) are the referee's, not the contributor's, so
+    the thing that writes history is run by whoever ran those.
+    """
+    target = load_target(args.target)
+    record = json.loads(Path(args.record).read_text())
+
+    if record["target"] != target["_slug"]:
+        die(f"record is for target '{record['target']}', not '{target['_slug']}'")
+    if record["contractVersion"] != CONTRACT["contractVersion"]:
+        die(f"record is contractVersion {record['contractVersion']}, contract is "
+            f"{CONTRACT['contractVersion']} -- scores are only comparable within one version")
+    if not record.get("promotable") and not args.force:
+        failed = [k for k, v in record["gates"].items() if not v]
+        die(f"record did not pass its own gates ({', '.join(failed) or 'score <= 1.0'})")
+    # Gate 3 must be BACKED BY A RECORD, not asserted. A boolean flag is a
+    # promise; a record names the seed, the node and the changed files, so the
+    # verification can be reproduced by anyone later. "Verified" is granted, not
+    # owed -- and a claim nobody can re-check is not a grant.
+    held_out = None
+    if args.held_out_record:
+        held_out = json.loads(Path(args.held_out_record).read_text())
+        if held_out.get("gate") != "held-out-identity-and-speedup":
+            die(f"{args.held_out_record} is not a held-out verification record")
+        if held_out["target"] != target["_slug"]:
+            die(f"held-out record is for target '{held_out['target']}'")
+        if not held_out.get("passed"):
+            die(f"held-out verification FAILED on {len(held_out.get('mismatches', []))} "
+                f"prompt(s) — this candidate changes output on inputs it was not "
+                f"tuned against, which is exactly what gate 3 exists to catch.")
+        # The record has to describe THIS candidate. Verifying one diff and
+        # promoting another is the obvious way to launder a failing submission.
+        if held_out.get("patch") != record.get("patch"):
+            die(f"held-out record verified patch '{held_out.get('patch')}' but the bench "
+                f"record is for '{record.get('patch')}'. Verifying one submission and "
+                f"promoting another is the obvious way to launder a failing one.")
+        # vLLM-specific: gate 3 also proves the win GENERALIZES. A patch here is
+        # arbitrary Python and could memoize, so identity alone is not enough.
+        if not held_out.get("generalizes", False):
+            die("held-out speedup did not generalize to unseen prompts. A win that only "
+                "appears on prompts the submitter chose is a lookup table, not an "
+                "optimization.")
+    elif not args.force:
+        die("gate 3 (held-out token identity) has no verification record.\n"
+            "    Run it on the referee's node:\n"
+            f"      python3 harness/arena.py heldout --target {target['_slug']}\n"
+            "    then pass --held-out-record results/<target>/heldout-<stamp>.json.\n"
+            "    This is the gate that catches a kernel which reassociated its way "
+            "into a different argmax on everything except the prompts it was tuned "
+            "against -- promoting without it is the one shortcut that silently "
+            "corrupts the corpus.")
+
+    lb = load_leaderboard(target, create=True)
+    seq = len(lb["promotions"]) + 1
+
+    # Cumulative = product of paired ratios back to the origin. Each ratio was
+    # measured against the incumbent of its day, so the chain multiplies. It
+    # never re-derives from absolute tok/s: absolutes are not comparable across
+    # days on this fleet (24.05 -> 20.09 observed overnight).
+    prev = lb["current"]
+    cum_decode = prev["cumulativeDecodeSpeedup"] * record["decodeSpeedup"]
+    cum_prefill = prev["cumulativePrefillSpeedup"] * record["prefillSpeedup"]
+    cum_score = (cum_decode ** CONTRACT["scoring"]["decodeExponent"]) * \
+                (cum_prefill ** CONTRACT["scoring"]["prefillExponent"])
+
+    promotion = {
+        "seq": seq,
+        "promotedAt": now_iso(),
+        "measuredAt": record["at"],
+        "author": {
+            "handle": args.author,
+            "name": args.author_name or args.author,
+            "model": args.model,
+        },
+        "note": Path(args.note).read_text().strip() if args.note and Path(args.note).exists() else (args.note or ""),
+        "submissionUrl": args.url,
+        "scope": args.scope,
+        "alsoMoved": args.also_moved or [],
+        "changedFiles": record.get("changedFiles", []),
+        "patch": record.get("patch"),
+        "kernels": sorted({Path(f).name for f in record.get("changedFiles", [])}) or [record.get("patch") or ""],
+        "vsIncumbent": {
+            "decodeSpeedup": record["decodeSpeedup"],
+            "prefillSpeedup": record["prefillSpeedup"],
+            "score": record["score"],
+            "pairs": record["pairs"],
+        },
+        "cumulative": {
+            "decodeSpeedup": round(cum_decode, 5),
+            "prefillSpeedup": round(cum_prefill, 5),
+            "score": round(cum_score, 5),
+            "percentFaster": round((cum_decode - 1) * 100, 2),
+            # Absolutes projected from the origin through the ratio chain, so a
+            # leaderboard row can show tok/s without anyone re-measuring an old
+            # submission on today's thermals.
+            "decodeTps": round(lb["origin"]["decodeTps"] * cum_decode, 3),
+            "prefillTps": round(lb["origin"]["prefillTps"] * cum_prefill, 2),
+            # What THIS solver added, in percentage points of the headline. Not
+            # the same as (decodeSpeedup - 1): a x1.01 win on top of a x1.37
+            # frontier adds 1.4pp, not 1.0pp. This is the number the leaderboard
+            # shows in green, and getting it from the ratio would understate
+            # every late win.
+            "addedPct": round((cum_decode - prev["cumulativeDecodeSpeedup"]) * 100, 2),
+        },
+        "verification": {
+            "node": record["node"],
+            "gates": record["gates"],
+            "heldOutVerified": bool(held_out and held_out.get("passed")),
+            "heldOutGeneralizes": bool(held_out and held_out.get("generalizes")),
+            "heldOut": {
+                "seed": held_out["seed"],
+                "promptCount": held_out["promptCount"],
+                "at": held_out["at"],
+                "node": held_out["node"],
+                "regenerate": held_out["regenerate"],
+                "heldOutDecodeSpeedup": held_out.get("heldOutDecodeSpeedup"),
+            } if held_out else None,
+            "referee": args.referee,
+        },
+    }
+    lb["promotions"].append(promotion)
+    lb["current"] = {
+        # Absolute tok/s is projected from the origin through the ratio chain,
+        # not read off today's run, so the series stays internally consistent.
+        "decodeTps": round(lb["origin"]["decodeTps"] * cum_decode, 3),
+        "prefillTps": round(lb["origin"]["prefillTps"] * cum_prefill, 2),
+        "cumulativeDecodeSpeedup": round(cum_decode, 5),
+        "cumulativePrefillSpeedup": round(cum_prefill, 5),
+        "cumulativeScore": round(cum_score, 5),
+        "promotionCount": seq,
+        "leaderHandle": args.author,
+        "updatedAt": now_iso(),
+    }
+
+    path = leaderboard_path(target)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(lb, indent=2) + "\n")
+    Out.step(f"promoted #{seq} by {args.author}")
+    Out.info(f"vs incumbent : decode x{record['decodeSpeedup']:.4f}  prefill x{record['prefillSpeedup']:.4f}")
+    Out.info(f"cumulative   : decode x{cum_decode:.4f}  ({(cum_decode-1)*100:+.2f}% vs origin)")
+    Out.info(f"frontier     : {lb['current']['decodeTps']} tok/s decode")
+    Out.info(f"written to   : {path.relative_to(ROOT)}")
+
+
+def cmd_leaderboard(args):
+    target = load_target(args.target)
+    lb = load_leaderboard(target, create=args.init)
+    if args.init and not leaderboard_path(target).exists():
+        # A target with zero promotions still publishes a leaderboard: the site
+        # needs the origin to draw the flat baseline the frontier departs from,
+        # and an empty chart is a truthful chart.
+        leaderboard_path(target).parent.mkdir(parents=True, exist_ok=True)
+        leaderboard_path(target).write_text(json.dumps(lb, indent=2) + "\n")
+        Out.info(f"initialized {leaderboard_path(target).relative_to(ROOT)}")
+    cur = lb["current"]
+    print(f"\n{Out.BOLD}{lb['targetName']}{Out.OFF}  ({lb['target']})")
+    print(f"  recipe    : {lb.get('recipe') or '-'}")
+    print(f"  origin    : {lb['origin']['decodeTps']} tok/s decode, "
+          f"{lb['origin']['prefillTps']} tok/s prefill  ({lb['origin']['recordedAt'][:10]})")
+    print(f"  frontier  : {cur['decodeTps']} tok/s decode  "
+          f"{Out.GRN}{(cur['cumulativeDecodeSpeedup']-1)*100:+.2f}%{Out.OFF} "
+          f"over {cur['promotionCount']} promotion(s)\n")
+    if not lb["promotions"]:
+        print(f"  {Out.DIM}no promotions yet -- the frontier is the baseline{Out.OFF}\n")
+        return
+    print(f"  {'#':>2}  {'when':<11} {'who':<18} {'vs inc':>8} {'cumulative':>11}  kernels")
+    for p in lb["promotions"]:
+        print(f"  {p['seq']:>2}  {p['promotedAt'][:10]:<11} {p['author']['handle'][:18]:<18} "
+              f"x{p['vsIncumbent']['decodeSpeedup']:.4f} {p['cumulative']['percentFaster']:>+10.2f}%  "
+              f"{', '.join(p['kernels'][:3]) or '-'}")
+    print()
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -602,6 +833,27 @@ def main():
     n.add_argument("--patch", required=True, help="directory name under patches/")
     n.add_argument("--pairs", type=int, default=None)
     n.set_defaults(fn=cmd_bench)
+
+    p_ = sub.add_parser("promote", help="referee: append a passing record to the frontier")
+    p_.add_argument("--target", required=True)
+    p_.add_argument("--record", required=True, help="path to a results/*.json bench record")
+    p_.add_argument("--author", required=True, help="GitHub handle of the contributor")
+    p_.add_argument("--author-name", default=None)
+    p_.add_argument("--model", default=None, help="the model that wrote it, if any")
+    p_.add_argument("--note", default=None, help="one-line summary, or a path to a note file")
+    p_.add_argument("--url", default=None, help="PR or submission URL")
+    p_.add_argument("--scope", choices=["engine-general", "model-specific"], default="model-specific")
+    p_.add_argument("--also-moved", nargs="*", default=None)
+    p_.add_argument("--referee", default=None)
+    p_.add_argument("--held-out-record", default=None,
+                    help="path to a passing `heldout` record (gate 3: identity AND speedup)")
+    p_.add_argument("--force", action="store_true")
+    p_.set_defaults(fn=cmd_promote)
+
+    l = sub.add_parser("leaderboard", help="print the frontier and its promotion chain")
+    l.add_argument("--target", required=True)
+    l.add_argument("--init", action="store_true", help="create it from baseline.json if absent")
+    l.set_defaults(fn=cmd_leaderboard)
 
     h = sub.add_parser("heldout", help="gate 3: identity AND speedup on generated prompts")
     h.add_argument("--target", required=True)
