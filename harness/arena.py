@@ -73,7 +73,7 @@ def now_iso():
 
 # ------------------------------------------------------------------- contract
 
-def load_target(slug):
+def load_target(slug, allow_blocked=False):
     path = ROOT / "targets" / slug / "target.json"
     if not path.exists():
         avail = sorted(p.name for p in (ROOT / "targets").iterdir() if p.is_dir())
@@ -93,11 +93,20 @@ def load_target(slug):
         Out.warn(f"{slug}: weights are NOT publicly downloadable — this must not be "
                  f"anyone's entry point")
     if t.get("status") == "blocked":
-        blockers = t.get("blockers", [])
-        hard = [b for b in blockers if b.get("severity") == "hard"]
-        die(f"target '{slug}' is blocked and cannot be measured yet.\n" +
-            "".join(f"    - {b['id']}: {b['what'][:150]}...\n" for b in hard) +
-            "    It is scaffolded so the work is visible, not to be run.")
+        # A RESOLVED blocker does not block. Keeping resolved entries is
+        # deliberate -- they are the target's history, and how it got unstuck is
+        # worth more than the fact that it is unstuck -- but they must not be
+        # counted here, or a target can never reopen.
+        hard = [b for b in t.get("blockers", [])
+                if b.get("severity") == "hard" and not b.get("resolved")]
+        if hard and not allow_blocked:
+            die(f"target '{slug}' is blocked and cannot be measured yet.\n" +
+                "".join(f"    - {b['id']}: {b['what'][:150]}...\n" for b in hard) +
+                "    It is scaffolded so the work is visible, not to be run.\n"
+                "    To work ON the blocker (diagnostics, bisection), pass --allow-blocked.")
+        if hard:
+            Out.warn(f"{slug} is blocked by {', '.join(b['id'] for b in hard)} — "
+                     f"running anyway (--allow-blocked). Nothing measured here is a score.")
     return t
 
 
@@ -579,7 +588,7 @@ def cmd_warm(args):
     separate command so that a run which needed warming is visible as a run that
     needed warming.
     """
-    target = load_target(args.target)
+    target = load_target(args.target, allow_blocked=getattr(args, "allow_blocked", False))
     prompts = prompt_set(target)
     target = dict(target)
     target["requestTimeout"] = args.timeout
@@ -1086,6 +1095,9 @@ def main():
                                     "on-disk cache; required before baselining a TP target")
     w.add_argument("--target", required=True)
     w.add_argument("--patch", default=None)
+    w.add_argument("--allow-blocked", action="store_true",
+                   help="run against a target with an unresolved hard blocker. For "
+                        "diagnostics and bisection only -- nothing it produces is a score.")
     w.add_argument("--timeout", type=int, default=3600,
                    help="per-request timeout; generous on purpose, a cold TileLang "
                         "compile under TP can take minutes and must not be killed")

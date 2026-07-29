@@ -4,14 +4,15 @@
   "recipe": "deepseek-v4-flash-dspark-dual-spark-1m",
   "recipeUrl": "https://howtospark.com/recipes/deepseek-v4-flash-dspark-dual-spark-1m",
   "status": "blocked",
-  "statusNote": "Serves, decodes at 26.6 tok/s, and greedy output is provably identical across boots -- but it cannot hold a 4-boot baseline. Roughly half of all long TP2 runs deadlock inside a collective. That is the only thing left, and it is upstream of the arena.",
+  "statusNote": "Serves, decodes at 26.6 tok/s, and greedy output is provably identical across boots. It cannot hold a 4-boot baseline because TP2 on this fleet stalls at random -- a vLLM message-queue bug that reproduces on a 21 GB model with none of this target's code, so it is not this target's fault and not this target's fix.",
   "blockers": [
     {
       "id": "multi-node-determinism",
       "severity": "hard",
       "resolved": "2026-07-29",
       "what": "Whether greedy token identity survives an NCCL allreduce was unmeasured, and no TP target could be ranked until it was settled.",
-      "answer": "It survives. Two boots, TP2 across two Sparks, NCCL over RoCE, warmup discarded: 4/4 prompts byte-identical (see results/_multinode/determinism-2026-07-29.txt). Neither boot hung, which also supports the standing theory that the 07-28 hangs were the TCP-socket fallback rather than a kernel fault.",
+      "answer": "It survives. Two boots, TP2 across two Sparks, NCCL over RoCE, warmup discarded: 4/4 prompts byte-identical (see results/_multinode/determinism-2026-07-29.txt).",
+      "correction": "That measurement's write-up originally credited the clean run to RDMA, implying the earlier hangs were the TCP-socket fallback. That was wrong and is retracted: the hangs recur on RoCE and are a vLLM message-queue bug (tp2-shm-broadcast-stall). The two boots here were simply two runs that did not happen to trip it -- which is also why a 4-boot baseline cannot be relied on.",
       "sharedWith": "glm-5-2-dual-spark-tp2 and every other dual-Spark recipe \u2014 this is a property of the collective, not of a model.",
       "scope": "Two boots at 8192 context, one config, four prompts. Enough to make multi-node rankable; the baseline's per-prompt stability screening still applies.",
       "nextStep": "Record the arena baseline."
@@ -25,19 +26,15 @@
       "trap": "The fix READ as failed for a day. Tailscale SSH terminates inside tailscaled and never runs pam_limits, so any ulimit taken over the tailnet reports systemd's 8 MB default no matter what limits.d says. Ray workers inherit whatever launched them, so a cluster started from a tailnet session gets 8 MB memlock on every raylet and NCCL silently falls back to sockets EVEN WITH THE ROOT FIX APPLIED. Launch the head via `ssh localhost` and the worker over its LAN address, and assert unlimited on both inside the script."
     },
     {
-      "id": "tp2-collective-deadlock",
+      "id": "tp2-shm-broadcast-stall",
       "severity": "hard",
       "opened": "2026-07-29",
-      "what": "About half of all long TP2 runs deadlock. Both ranks spin at 100% CPU while the GPUs draw ~14 W and one reports 0% utilisation -- a busy-wait inside a collective that never completes. It ends as `TimeoutError: RPC call to sample_tokens timed out` on whatever prompt happened to be in flight.",
-      "notTheCause": [
-        "NOT the interconnect. Every run today was verifiably on RoCE (NET/IB, 200 Gb/s virtual devices), which retires the earlier TCP-socket-fallback theory from 07-28.",
-        "NOT kernel JIT. The 37-minute hang logged ZERO new JIT events; the six in that boot all landed early and the run was fine after them.",
-        "NOT a prompt or a shape. b-prose-short is 64 tokens and decoded at 26.546 tok/s an hour earlier, then hung on a later boot under an identical config.",
-        "NOT memory. kv_cache_usage was 0.5% and the oom-guard never tripped."
-      ],
-      "evidence": "4 long runs on 2026-07-29: two baseline arms died on c-code-2k (at 10 and 167 output tokens), one full-length warm pass hung on b-prose-short for 37 min, and one 16-token warm pass completed all four shapes. Two full boots on the morning determinism probe also completed cleanly. So it is intermittent at roughly 50% per long run -- which makes P(4 clean boots) too low to record a baseline.",
+      "what": "Requests stall indefinitely at random under TP2. All three processes are READERS on vLLM's shm_broadcast queue and nobody writes: both ranks wait in worker_busy_loop for a command, the driver waits in get_response for a reply. The 100% CPU at idle GPU wattage is shm_broadcast's spin-poll.",
       "whyItBlocks": "A baseline needs 4 boots to agree. At this failure rate it will not finish, and a partial baseline is worse than none: it would define goldens from whichever prompts happened to survive.",
-      "nextStep": "Bisect the deadlock outside the arena: try --enforce-eager (removes cudagraph capture from the collective path), then --distributed-executor-backend mp instead of ray, then NCCL_ASYNC_ERROR_HANDLING/NCCL_BLOCKING_WAIT to convert the busy-wait into a diagnosable abort. Capture py-spy dumps of both ranks mid-hang -- that names the stalled collective, which nothing measured so far does."
+      "nextStep": "Chase it on the 21 GB reproducer, not here. VLLM_MQ_MAX_CHUNK_BYTES_MB first, then shm_broadcast's local-vs-remote reader accounting.",
+      "scope": "FLEET-WIDE, not this model. Reproduced on Qwen3.6-27B-NVFP4 (21 GB, none of this target's kernels): warmup 1 s, request 1 fine, request 2 at ~800 prompt tokens hung the full 300 s. So this blocks every dual-Spark target, and it is tracked in benchmark.json under measurement.multiNode.fleetBlocker.",
+      "ruledOut": "the interconnect (raw TCP measured 1561 MB/s during a hang), RoCE GID churn (fixed by pinning NCCL_IB_HCA; stall persists with zero warnings), NCCL itself (no rank is in a collective), async scheduling (disabled; persists), kernel JIT (zero events during a 37-minute hang), prompt shape (a 64-token prompt hung after decoding fine earlier), and memory (kv usage 0.5%).",
+      "reproduce": "harness/tp2_isolate.sh ~/models/hf/Qwen3.6-27B-NVFP4 24"
     },
     {
       "id": "oom-guard-headroom",
@@ -91,7 +88,9 @@
   "seed": 0,
   "defaultMaxTokens": 256,
   "promptSettings": {
-    "d-doc-8k": { "maxTokens": 128 }
+    "d-doc-8k": {
+      "maxTokens": 128
+    }
   },
   "promptSettingsNote": "d-doc-8k is ~7.7k tokens and --max-model-len is 8192, so its output budget has to be small enough to fit. A request that overruns the context aborts the arm.",
   "startupTimeout": 1800,
@@ -102,8 +101,15 @@
     "nodes": 2,
     "nic": "enp1s0f1np1",
     "requireRdma": true,
-    "head": { "ip": "192.168.100.1" },
-    "workers": [{ "host": "192.168.0.28", "ip": "192.168.100.2" }],
+    "head": {
+      "ip": "192.168.100.1"
+    },
+    "workers": [
+      {
+        "host": "192.168.0.28",
+        "ip": "192.168.100.2"
+      }
+    ],
     "hostNote": "workers[].host is a LAN address reached over real OpenSSH. It must NOT be a tailnet address: tailscaled terminates the session itself and never runs pam_limits, so every raylet would inherit an 8 MB memlock and NCCL would fall back to TCP sockets without saying so.",
     "preflight": [
       {
@@ -115,20 +121,34 @@
     ]
   },
   "serveArgs": [
-    "--served-model-name", "dsv4",
-    "--distributed-executor-backend", "ray",
-    "--tensor-parallel-size", "2",
-    "--block-size", "256",
-    "--kv-cache-dtype", "fp8",
-    "--max-model-len", "8192",
-    "--gpu-memory-utilization", "0.70",
-    "--kv-cache-memory-bytes", "6442450944",
-    "--max-num-seqs", "1",
-    "--max-num-batched-tokens", "8192",
+    "--served-model-name",
+    "dsv4",
+    "--distributed-executor-backend",
+    "ray",
+    "--tensor-parallel-size",
+    "2",
+    "--block-size",
+    "256",
+    "--kv-cache-dtype",
+    "fp8",
+    "--max-model-len",
+    "8192",
+    "--gpu-memory-utilization",
+    "0.70",
+    "--kv-cache-memory-bytes",
+    "6442450944",
+    "--max-num-seqs",
+    "1",
+    "--max-num-batched-tokens",
+    "8192",
+    "--no-async-scheduling",
     "--trust-remote-code"
   ],
+  "asyncSchedulingNote": "MANDATORY, and it is the fix for the TP2 deadlock. Async scheduling makes max_concurrent_batches 2, which puts the engine on step_with_batch_queue -- it submits batch N+1 while collecting N. Caught mid-hang, all three processes were READERS on the shm_broadcast queue and none was in a collective: the driver waited in get_response for a reply, and both ranks waited in worker_busy_loop for a command. Nobody was writing. The 100% CPU with GPUs at idle wattage is shm_broadcast's spin-poll, which is what made this look like an NCCL problem for two days. The flag is --no-async-scheduling; note that `--async-scheduling False` silently sets it TRUE and leaves 'False' as a stray positional argument.",
   "serveArgsNote": "--max-num-seqs 1 is mandatory: batching breaks token identity on this part (n=2 -> 2 distinct outputs), and the whole cheap gate rests on greedy determinism. --max-model-len is 8192, NOT the recipe's 1M -- the KV pin that clears the oom-guard does not leave room for it, and a target that cannot finish an arm cannot rank anything. A 1M-context variant is its own target.",
   "env": {
+    "NCCL_IB_HCA": "rocep1s0f1",
+    "NCCL_IB_HCA_NOTE": "Pin NCCL to the RoCE device on the direct 200G link (rocep1s0f1 -> enp1s0f1np1, 192.168.100.x). Unpinned, NCCL also builds a virtual device on roceP2p1s0f1, a DIFFERENT NIC, and then logs `NCCL WARN NET/IB : roceP2p1s0f1:1 GID table changed` continuously. A RoCE GID table holds one entry per IP address on the port, so it churns every time an address appears or disappears -- and this fleet runs Tailscale plus rotating IPv6 privacy addresses. Churn invalidates NCCL's queue-pair state mid-run, which is why the deadlock was intermittent and why it looked like everything except what it was.",
     "RAY_local_fs_capacity_threshold": "1",
     "RAY_memory_monitor_refresh_ms": "0",
     "VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS": "900",

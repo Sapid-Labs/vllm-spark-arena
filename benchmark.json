@@ -119,7 +119,25 @@
         "Every node passes the thermal gate and is verified idle before an arm starts -- the worker is where somebody else's job hides.",
         "The candidate tree is synced to every node before its arm. A worker still on the base build measures a mixed cluster and produces a plausible number rather than an error."
       ],
-      "intent": "Multi-node IS in scope for this arena -- plenty of Spark owners have two or more, and the clustered recipes are the ones that most need kernel help."
+      "intent": "Multi-node IS in scope for this arena -- plenty of Spark owners have two or more, and the clustered recipes are the ones that most need kernel help.",
+      "fleetBlocker": {
+        "id": "tp2-shm-broadcast-stall",
+        "opened": "2026-07-29",
+        "severity": "hard",
+        "scope": "EVERY multi-node target on this fleet, not one model. No TP2 target can hold a multi-boot baseline until it is fixed.",
+        "what": "Under TP2 across two Sparks, requests stall indefinitely at random. Both worker ranks sit in multiproc_executor.worker_busy_loop -> dequeue -> acquire_read waiting for a command, and the driver sits in step_with_batch_queue -> get_response -> dequeue waiting for a response. All three are READERS on vLLM's shm_broadcast queue and nobody is writing. The 100% CPU with GPUs at idle wattage is shm_broadcast's spin-poll, which is why this looked like an NCCL collective hang for two days.",
+        "isolated": "It is NOT DeepSeek. Reproduced on Qwen3.6-27B-NVFP4 (21 GB, no sparse MLA, no flashinfer overlay, no vendored kernel): warmup returned in 1 s, request 1 passed, request 2 with an ~800-token prompt hung for the full 300 s. Reproduce with harness/tp2_isolate.sh -- 2-minute boots instead of DeepSeek's five, which is the difference between a tractable bug hunt and an untractable one.",
+        "ruledOut": [
+          "The interconnect. Raw TCP over the direct 200G link measured 1561 MB/s DURING a hang.",
+          "RoCE GID churn. Fixed separately by pinning NCCL_IB_HCA=rocep1s0f1; the stall persists with zero GID warnings.",
+          "NCCL entirely. No rank is in a collective in any stack dump.",
+          "Async scheduling. --no-async-scheduling is now set and the stall persists.",
+          "Kernel JIT. A 37-minute hang logged zero JIT events.",
+          "Prompt shape. A 64-token prompt that decoded at 26.5 tok/s hung on a later boot; the stall point moves between runs.",
+          "Memory. kv_cache_usage 0.5%, oom-guard never tripped."
+        ],
+        "nextStep": "Chase it on the 21 GB reproducer. Suspects in order: VLLM_MQ_MAX_CHUNK_BYTES_MB (the stall correlates loosely with prompt size, and that knob sets the remote chunking), then the local-vs-remote reader accounting in shm_broadcast (a writer waits for ALL readers to set a read flag, and a miscounted reader would hang exactly like this), then vLLM 0.26.0 upstream issues for the same signature."
+      }
     }
   },
   "policy": {
