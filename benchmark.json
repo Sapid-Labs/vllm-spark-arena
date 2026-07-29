@@ -7,7 +7,6 @@
     "cudaArch": "sm_121",
     "note": "torch.cuda.get_arch_list() on this part returns sm_80/90/100/110/120 -- nothing is built for 12.1. Documented consequences on vLLM specifically: FLASHINFER_CUTLASS for NVFP4 MoE was removed on sm_121 'and it costs 13%'; HUMMING cannot initialize; VLLM_CUTLASS and FLASHINFER_TRTLLM fail with 'kernel does not support current device'. That gap is the prize."
   },
-
   "substrate": {
     "kind": "patch",
     "why": "vLLM on this fleet is a pip wheel with precompiled CUDA extensions (_C_stable_libtorch.abi3.so, _flashmla_C.abi3.so, ...). Nobody has built it from source on aarch64/GB10, so there is no vendored tree to edit. Submissions are Python patches applied over the installed wheel.",
@@ -20,12 +19,10 @@
     "mechanism": "A submission is a directory under patches/<name>/ containing sitecustomize.py. It is put on PYTHONPATH for the candidate arm only, so it applies at interpreter startup and therefore reaches vLLM's spawned engine and worker processes -- which a post-import monkeypatch would not. Precedent: bench/patches/laguna-int4 on howtospark forces the Triton MoE path over Marlin in four lines.",
     "outOfScope": "CUDA kernels in csrc/. Reaching them needs a from-source vLLM build for sm_121, which does not exist yet on this hardware and is tracked as its own milestone -- it is also what would unlock recovering the documented 13%."
   },
-
   "editableSurface": {
     "rule": "patches/<name>/**. Nothing else may differ between the arms: same wheel, same model file, same serve arguments, same environment apart from PYTHONPATH.",
     "enforcement": "The harness builds both arms from the target's own serveArgs and diffs the wheel version and model sha256. A submission that changes the serve command is changing the measurement, not the engine."
   },
-
   "gates": [
     {
       "id": "config-identity",
@@ -56,7 +53,6 @@
       "rule": "score > the current leaderboard score for every target claimed."
     }
   ],
-
   "scoring": {
     "formula": "decode_speedup^0.75 * prefill_speedup^0.25",
     "decodeExponent": 0.75,
@@ -66,7 +62,6 @@
     "pairs": 2,
     "aggregate": "median of per-pair ratios"
   },
-
   "measurement": {
     "batchSize": 1,
     "warmupRequests": 1,
@@ -74,18 +69,23 @@
     "pinnedServeConfig": {
       "required": true,
       "why": "vLLM is only cross-boot deterministic under a pinned config, and gates 2 and 3 compare a baseline server against a candidate server -- two processes. Without the pins the gate fires on boot noise instead of on the patch. This is the one structural difference from the llama.cpp arena, where an ordinary serve command is already cross-boot identical.",
-      "measured": "2026-07-28, Qwen3.6-27B-NVFP4 on vLLM 0.26.0, three boots each: identical across boots with --enforce-eager AND with cudagraphs on. So capture is not the cause and the arena does NOT have to pay eager execution. Supersedes the 2026-07-27 five-boot finding, which used --max-num-seqs 4.",
+      "measured": "2026-07-28, Qwen3.6-27B-NVFP4 on vLLM 0.26.0. A single-short-prompt probe was identical across three boots with cudagraphs on AND with --enforce-eager, so capture is not the cause and the arena does not pay eager execution. But a wider FOUR-boot run over four prompts corrected that picture: the first boot against a cold VLLM_CACHE_ROOT differs on every prompt, and even among warm boots identity is PER-PROMPT \u2014 three of four were rock stable (including a 6,863-token one) while a 1,715-token prompt flipped between two hashes. Not a length effect; a numerical knife-edge on one input, same family as batch size flipping the argmax at n=2.",
       "pins": [
         "--max-num-seqs 1  (prime suspect for the earlier cross-boot failure: it sets the profiling batch shape, and batch shape already flips the argmax on this part at n=2)",
         "--kv-cache-memory-bytes  (so the KV pool is not sized from profiled free memory, which changes block count and therefore attention tiling)",
         "--max-model-len",
         "--gpu-memory-utilization",
         "VLLM_CACHE_ROOT shared across boots"
+      ],
+      "consequences": [
+        "The first boot against a cold compile cache is discarded, exactly as the first request after a server start is discarded. Same rule, one level up.",
+        "Prompts are SCREENED for cross-boot stability when the baseline is recorded, and unstable ones are excluded from the gate and recorded in goldens.json. A prompt whose argmax is a coin flip would fail honest submissions at random.",
+        "A target needs at least two surviving prompts. One is too weak to catch a kernel that changed behaviour on a different shape."
       ]
     },
     "determinism": {
       "batchSize": "12/12 identical at batch 1 warm; n=2 -> 2 distinct, n=6 -> 5. Any batching breaks token identity, so the ranked track is serial.",
-      "crossBoot": "Holds under the pinned config above (3/3 boots). Does not hold without it."
+      "crossBoot": "Per-prompt, under the pinned config and a warm cache. Not global \u2014 see pinnedServeConfig.measured. This is why the baseline screens prompts instead of assuming them."
     },
     "thermalGate": {
       "metric": "nvidia-smi --query-gpu=temperature.gpu",
@@ -99,7 +99,6 @@
       "intent": "Multi-node IS in scope for this arena -- plenty of Spark owners have two or more, and the clustered recipes are the ones that most need kernel help."
     }
   },
-
   "policy": {
     "optimizationVsRecipe": "Optimizations preserve output and get the cheap gate. Changes that alter output (precision, quantization, sampling, speculation) are a new RECIPE on howtospark.com, not an arena submission, and need eval evidence.",
     "configVsEngine": "Tuning serve FLAGS is a recipe, not a submission. This arena ranks changes to what the engine DOES with a fixed config -- dispatch, kernel selection, memory layout, scheduling."

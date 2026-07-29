@@ -96,19 +96,39 @@ processes. So the whole cheap gate rests on greedy output surviving a restart.
 llama.cpp does that under an ordinary serve command (measured: two boots an hour
 apart, 4/4 byte-identical). vLLM does **not** — unless it is pinned.
 
-Measured 2026-07-28 on Qwen3.6-27B-NVFP4, vLLM 0.26.0, three boots each:
+Measured 2026-07-28 on Qwen3.6-27B-NVFP4, vLLM 0.26.0. A first probe on a single
+short prompt came back identical across three boots, with cudagraphs on and with
+`--enforce-eager`. **A wider four-boot run over four prompts did not agree with
+that**, and the fuller picture is the one that matters:
 
-| Config | Within boot | Across 3 boots |
-|---|---|---|
-| pinned, `--enforce-eager` | 3/3 identical | **identical** |
-| pinned, **cudagraphs on** | 3/3 identical | **identical** |
+| prompt | boot 1 (cold cache) | boot 2 | boot 3 | boot 4 |
+|---|---|---|---|---|
+| code, 93 tok | `ec2e7194` | `efc4efe8` | `efc4efe8` | `efc4efe8` |
+| prose, 73 tok | `35c3d229` | `f1ed7ada` | `f1ed7ada` | `f1ed7ada` |
+| **code, 1,715 tok** | `d758565d` | `ad33fd5a` | **`c0f7047a`** | `ad33fd5a` |
+| doc, 6,863 tok | `a8351da1` | `c5f8b3c6` | `c5f8b3c6` | `c5f8b3c6` |
 
-Two useful conclusions. Cudagraph capture is **not** the cause, so the arena does
-not have to pay `--enforce-eager` — a real speed tax avoided. And an earlier
-five-boot run of the *same model and engine* that came out non-deterministic
-differed mainly in `--max-num-seqs` (4 vs 1), which is the prime suspect: it sets
-the profiling batch shape, and batch shape already flips the argmax on this part
-at `n=2`.
+Two things fall out.
+
+**The first boot against a cold `VLLM_CACHE_ROOT` is not comparable.** Boot 1
+differs on every prompt; boots 2–4 share a warm cache and mostly agree. This is
+the request-warmup rule one level up, and the harness now discards a cache-warmup
+boot for the same reason it discards a warmup request.
+
+**Cross-boot identity is per-prompt, not global.** Three of the four prompts are
+rock stable across warm boots — including the 6,863-token one — while the
+1,715-token prompt flips between two hashes. So it is not a length effect; it is a
+numerical knife-edge on one particular input, the same family as batch size
+flipping the argmax at `n=2`.
+
+A prompt whose argmax is a coin flip cannot test anything — it would fail honest
+submissions at random. So `baseline` **screens each prompt** across boots and
+keeps only the stable ones, recording what it excluded and why in `goldens.json`.
+An excluded prompt is evidence about the model's numerical stability, not a
+failure to hide.
+
+Cudagraph capture is not implicated either way, so the arena does not have to pay
+`--enforce-eager`.
 
 The pins: `--max-num-seqs 1`, `--kv-cache-memory-bytes`, `--max-model-len`,
 `--gpu-memory-utilization`, and a `VLLM_CACHE_ROOT` shared across boots. They
@@ -131,7 +151,7 @@ happen.
 
 | Target | Shape | Why it is first |
 |---|---|---|
-| `qwen3-6-27b-nvfp4` | 27B NVFP4, single Spark | Its cross-boot determinism is measured, not assumed — twice over, six boots total |
+| `qwen3-6-27b-nvfp4` | 27B NVFP4, single Spark | Its cross-boot behaviour is *measured* — including the one prompt in four that is not stable, which is why prompt screening exists |
 
 **Multi-node is in scope but not open yet.** Plenty of Spark owners have two or
 more, and the clustered recipes are the ones that most need kernel help. The
@@ -143,5 +163,10 @@ comparing across a collective whose reduction order is not known to be stable.
 
 ## Status
 
-Early. The contract, harness and first target are here; the baseline lands next.
-Submissions are not open until there is a frontier to beat.
+Early, and honest about it. The contract, harness and first target are here. The
+baseline is not recorded yet: the first two attempts *failed their own stability
+screen*, which is how the cold-cache and knife-edge-prompt findings above were
+made. That is the harness working — a baseline that cannot reproduce itself has
+no business defining a gate.
+
+Submissions are not open until there is a screened baseline to beat.

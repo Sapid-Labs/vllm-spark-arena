@@ -355,22 +355,57 @@ def cmd_baseline(args):
     Out.info(f"vLLM {wheel_version()}")
     arms = [run_arm(target, None, prompts, "baseline", f"base-{i}") for i in range(args.repeats)]
 
-    goldens = {r["id"]: {"sha256": r["sha256"], "completionTokens": r["completionTokens"]}
-               for r in arms[0]["prompts"]}
-    for arm in arms[1:]:
-        for r in arm["prompts"]:
-            if goldens[r["id"]]["sha256"] != r["sha256"]:
-                die(f"baseline is not deterministic across boots on '{r['id']}'.\n"
-                    f"    The pinned serve config is what makes vLLM cross-boot identical — "
-                    f"check --max-num-seqs 1, --kv-cache-memory-bytes, --max-model-len, "
-                    f"--gpu-memory-utilization and a shared VLLM_CACHE_ROOT. Without those "
-                    f"the gate would fire on boot noise instead of on a patch.")
-    if args.repeats > 1:
-        Out.ok(f"cross-boot determinism ({args.repeats} boots agree on every prompt)")
+    # The FIRST boot is discarded when the compile cache was cold. Measured
+    # 2026-07-28: against an empty VLLM_CACHE_ROOT, boot 1 differed from every
+    # later boot on all four prompts; once warm, three consecutive boots agreed
+    # on three of them. This is the request-warmup rule one level up — the first
+    # boot against a cold cache is not comparable to the rest.
+    if args.discard_first and len(arms) > 1:
+        Out.info("discarded boot 0 (compile-cache warmup — a cold VLLM_CACHE_ROOT "
+                 "changes kernel selection, so boot 0 is not comparable)")
+        arms = arms[1:]
+
+    # Prompt-level stability screening. Under the pinned config vLLM is mostly
+    # cross-boot identical, but NOT reliably so per prompt: one prompt of four
+    # was observed flipping between two hashes across three warm boots, while the
+    # other three — including a 6,863-token one — were rock stable. So this is a
+    # numerical knife-edge on a particular input, not a length effect.
+    #
+    # A prompt whose argmax is a coin flip cannot test anything: it would fail
+    # honest submissions at random. Screen it out here, loudly, and record what
+    # was dropped — silently shrinking the gate would be much worse.
+    stable, unstable = {}, {}
+    for r in arms[0]["prompts"]:
+        seen = {a_r["sha256"] for a in arms for a_r in a["prompts"] if a_r["id"] == r["id"]}
+        if len(seen) == 1:
+            stable[r["id"]] = {"sha256": r["sha256"],
+                               "completionTokens": r["completionTokens"],
+                               "promptTokens": r["promptTokens"]}
+        else:
+            unstable[r["id"]] = sorted(seen)
+            Out.warn(f"{r['id']}: {len(seen)} distinct outputs across {len(arms)} boots "
+                     f"— excluded from the gate")
+    if not stable:
+        die("no prompt was stable across boots. Either the serve config is not pinned "
+            "(check --max-num-seqs 1, --kv-cache-memory-bytes, --max-model-len, "
+            "--gpu-memory-utilization, shared VLLM_CACHE_ROOT) or this model/config is "
+            "not a viable arena target — the token-identity gate needs a stable baseline "
+            "before it can judge anything.")
+    if len(stable) < 2:
+        die(f"only {len(stable)} stable prompt survived screening. A one-prompt gate is "
+            f"too weak to catch a kernel that changed behaviour on a different shape.")
+    Out.ok(f"cross-boot stability: {len(stable)}/{len(stable) + len(unstable)} prompts "
+           f"identical across {len(arms)} boots")
+    goldens = stable
 
     (target["_dir"] / "goldens.json").write_text(json.dumps(
         {"contractVersion": CONTRACT["contractVersion"], "wheel": wheel_version(),
-         "recordedAt": now_iso(), "prompts": goldens}, indent=2) + "\n")
+         "recordedAt": now_iso(), "boots": len(arms), "prompts": goldens,
+         "excluded": unstable,
+         "excludedNote": "Prompts whose greedy output was not identical across every "
+                         "measured boot. They are recorded rather than deleted: an "
+                         "excluded prompt is evidence about this model's numerical "
+                         "stability, and the gate must not silently shrink."}, indent=2) + "\n")
     (target["_dir"] / "baseline.json").write_text(json.dumps(
         {"contractVersion": CONTRACT["contractVersion"], "wheel": wheel_version(),
          "recordedAt": now_iso(), "node": os.uname().nodename,
@@ -537,8 +572,13 @@ def main():
 
     b = sub.add_parser("baseline", help="record goldens + baseline (no patch)")
     b.add_argument("--target", required=True)
-    b.add_argument("--repeats", type=int, default=2,
-                   help="boots; >1 also proves cross-boot determinism under the pinned config")
+    b.add_argument("--repeats", type=int, default=4,
+                   help="boots. The first is discarded as compile-cache warmup, and the "
+                        "rest screen each prompt for cross-boot stability, so 4 gives 3 "
+                        "measured boots.")
+    b.add_argument("--no-discard-first", dest="discard_first", action="store_false",
+                   help="keep boot 0 (only correct if VLLM_CACHE_ROOT is already warm)")
+    b.set_defaults(discard_first=True)
     b.set_defaults(fn=cmd_baseline)
 
     n = sub.add_parser("bench", help="paired patched-vs-baseline run with gates 1, 2, 4")
