@@ -1,38 +1,69 @@
 {
   "slug": "deepseek-v4-flash-dspark-dual-spark-1m",
-  "name": "DeepSeek V4 Flash DSpark — dual Spark, 1M context",
+  "name": "DeepSeek V4 Flash DSpark \u2014 dual Spark, 1M context",
   "recipe": "deepseek-v4-flash-dspark-dual-spark-1m",
   "recipeUrl": "https://howtospark.com/recipes/deepseek-v4-flash-dspark-dual-spark-1m",
-
   "status": "blocked",
-  "statusNote": "Scaffolded so the work is visible and the blockers are named, NOT runnable. Three separate things stand between this recipe and a ranked target, and only the first is about this model.",
-
+  "statusNote": "Runs now, but is not yet rankable. The engine blocker is GONE: this recipe served on stock vLLM 0.26.0 at --block-size 256 on 2026-07-28 via the flashinfer overlay (patches/flashinfer-dsv4-pbs256). What remains is the measurement contract, not the engine.",
   "blockers": [
     {
       "id": "multi-node-determinism",
       "severity": "hard",
-      "what": "This recipe runs across two Sparks. Whether greedy token identity survives an NCCL allreduce is unmeasured — two attempts on 2026-07-28 died on 'RPC call to sample_tokens timed out' before producing an answer, for reasons unrelated to determinism. Until it is settled, no multi-node target can be ranked: the gate would be comparing across a collective whose reduction order is not known to be stable.",
-      "sharedWith": "glm-5-2-dual-spark-tp2, and every other dual-Spark recipe. One measurement unblocks all of them.",
-      "nextStep": "Retry the TP2 determinism probe on the stack the working dual-Spark recipes actually use — vllm-025, --enforce-eager, and a memory-capped systemd scope — rather than the minimal 0.26.0 config that failed."
+      "what": "Whether greedy token identity survives an NCCL allreduce is still unmeasured. Now that the model actually serves, this is finally MEASURABLE on this target rather than theoretical \u2014 boot it twice under the pinned config and compare hashes.",
+      "sharedWith": "glm-5-2-dual-spark-tp2 and every other dual-Spark recipe.",
+      "nextStep": "Run the arena baseline against this target once multiNode is enabled in the contract."
     },
     {
-      "id": "docker-substrate",
-      "severity": "hard",
-      "what": "This recipe does not use the pinned wheel this arena's contract names. It runs a prebuilt image, ghcr.io/anemll/dspark-vllm-gx10:0.1.1, carrying vLLM 0.25.2.dev0+g752a3a504 — a third-party dev build, launched with docker compose rather than $VENV/bin/vllm.",
-      "consequence": "The harness's Server class launches a venv binary and injects a patch via PYTHONPATH. Neither reaches inside a container. A docker substrate needs its own launcher and its own patch mechanism (a bind-mounted sitecustomize plus PYTHONPATH in the compose environment), and the pin becomes an image DIGEST rather than a wheel version.",
-      "nextStep": "Add substrate.kind = 'docker' to the contract and a matching launcher, once there is a reason to — which is after multi-node determinism is settled, not before."
+      "id": "memlock-8mb",
+      "severity": "soft",
+      "what": "ulimit -l is 8 MB on both nodes, so NCCL cannot use RDMA and falls back to sockets. It serves, but the interconnect is not running as the recipe intends, and a paired ratio measured over sockets is not the recipe's hardware.",
+      "nextStep": "Root, once: raise memlock, then drop NCCL_IB_DISABLE=1."
     },
     {
-      "id": "cross-boot-screening",
-      "severity": "unknown",
-      "what": "Every vLLM target has to pass prompt-level cross-boot stability screening before it can define a gate. This one has never been screened, and the sibling target showed that even a single-node, fully pinned config has prompts that flip.",
-      "nextStep": "Runs for free as part of `baseline`, once the two hard blockers are cleared."
+      "id": "oom-guard-headroom",
+      "severity": "soft",
+      "what": "oom-guard.sh trips at MemAvailable < 8192 MiB and killed a run that missed by 321 MiB, silently. The 6 GiB KV pin clears it, but the margin is thin and an arena arm must not die mid-measurement.",
+      "nextStep": "Either raise the guard for arena runs or keep the KV pin at 6 GiB and verify headroom before each arm."
     }
   ],
-
-  "why": "Worth scaffolding despite being blocked: at 1,048,576 tokens of context across two nodes with FP4 experts and FP8 dense, it exercises paths nothing else in the corpus does — and it is the recipe most likely to reward kernel work, because almost nothing on that path was written for sm_121.",
-
-  "model": "UNSET — see blockers.docker-substrate; this recipe pulls weights inside the container",
-  "serveArgs": [],
-  "serveArgsNote": "Deliberately empty. Filling these in from the recipe would imply the target is runnable by this harness, and it is not."
+  "why": "Worth scaffolding despite being blocked: at 1,048,576 tokens of context across two nodes with FP4 experts and FP8 dense, it exercises paths nothing else in the corpus does \u2014 and it is the recipe most likely to reward kernel work, because almost nothing on that path was written for sm_121.",
+  "served": {
+    "on": "2026-07-28",
+    "engine": "vLLM 0.26.0 (stock wheel + arena kernel overlay)",
+    "nodes": 2,
+    "blockSize": 256,
+    "kvCacheTokens": 17009,
+    "maxConcurrency": "2.08x at 8192/request",
+    "healthyAfterSeconds": 220,
+    "firstLightDecodeTps": 16.2,
+    "note": "First light, not a benchmark: --max-model-len 8192, NCCL over sockets because memlock is 8 MB, and there is no page-size-64 baseline to compare against because the model cannot run at 64 at all.",
+    "serveArgs": [
+      "--distributed-executor-backend",
+      "ray",
+      "--tensor-parallel-size",
+      "2",
+      "--block-size",
+      "256",
+      "--kv-cache-dtype",
+      "fp8",
+      "--max-model-len",
+      "8192",
+      "--gpu-memory-utilization",
+      "0.70",
+      "--kv-cache-memory-bytes",
+      "6442450944",
+      "--max-num-seqs",
+      "1",
+      "--max-num-batched-tokens",
+      "8192",
+      "--trust-remote-code"
+    ],
+    "env": {
+      "NCCL_IB_DISABLE": "1",
+      "RAY_local_fs_capacity_threshold": "1",
+      "RAY_memory_monitor_refresh_ms": "0",
+      "PYTHONPATH": "<arena>/patches/flashinfer-dsv4-pbs256"
+    }
+  },
+  "model": "~/models/hf/DeepSeek-V4-Flash"
 }
