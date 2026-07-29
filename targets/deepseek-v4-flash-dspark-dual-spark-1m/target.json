@@ -1,0 +1,38 @@
+{
+  "slug": "deepseek-v4-flash-dspark-dual-spark-1m",
+  "name": "DeepSeek V4 Flash DSpark — dual Spark, 1M context",
+  "recipe": "deepseek-v4-flash-dspark-dual-spark-1m",
+  "recipeUrl": "https://howtospark.com/recipes/deepseek-v4-flash-dspark-dual-spark-1m",
+
+  "status": "blocked",
+  "statusNote": "Scaffolded so the work is visible and the blockers are named, NOT runnable. Three separate things stand between this recipe and a ranked target, and only the first is about this model.",
+
+  "blockers": [
+    {
+      "id": "multi-node-determinism",
+      "severity": "hard",
+      "what": "This recipe runs across two Sparks. Whether greedy token identity survives an NCCL allreduce is unmeasured — two attempts on 2026-07-28 died on 'RPC call to sample_tokens timed out' before producing an answer, for reasons unrelated to determinism. Until it is settled, no multi-node target can be ranked: the gate would be comparing across a collective whose reduction order is not known to be stable.",
+      "sharedWith": "glm-5-2-dual-spark-tp2, and every other dual-Spark recipe. One measurement unblocks all of them.",
+      "nextStep": "Retry the TP2 determinism probe on the stack the working dual-Spark recipes actually use — vllm-025, --enforce-eager, and a memory-capped systemd scope — rather than the minimal 0.26.0 config that failed."
+    },
+    {
+      "id": "docker-substrate",
+      "severity": "hard",
+      "what": "This recipe does not use the pinned wheel this arena's contract names. It runs a prebuilt image, ghcr.io/anemll/dspark-vllm-gx10:0.1.1, carrying vLLM 0.25.2.dev0+g752a3a504 — a third-party dev build, launched with docker compose rather than $VENV/bin/vllm.",
+      "consequence": "The harness's Server class launches a venv binary and injects a patch via PYTHONPATH. Neither reaches inside a container. A docker substrate needs its own launcher and its own patch mechanism (a bind-mounted sitecustomize plus PYTHONPATH in the compose environment), and the pin becomes an image DIGEST rather than a wheel version.",
+      "nextStep": "Add substrate.kind = 'docker' to the contract and a matching launcher, once there is a reason to — which is after multi-node determinism is settled, not before."
+    },
+    {
+      "id": "cross-boot-screening",
+      "severity": "unknown",
+      "what": "Every vLLM target has to pass prompt-level cross-boot stability screening before it can define a gate. This one has never been screened, and the sibling target showed that even a single-node, fully pinned config has prompts that flip.",
+      "nextStep": "Runs for free as part of `baseline`, once the two hard blockers are cleared."
+    }
+  ],
+
+  "why": "Worth scaffolding despite being blocked: at 1,048,576 tokens of context across two nodes with FP4 experts and FP8 dense, it exercises paths nothing else in the corpus does — and it is the recipe most likely to reward kernel work, because almost nothing on that path was written for sm_121.",
+
+  "model": "UNSET — see blockers.docker-substrate; this recipe pulls weights inside the container",
+  "serveArgs": [],
+  "serveArgsNote": "Deliberately empty. Filling these in from the recipe would imply the target is runnable by this harness, and it is not."
+}

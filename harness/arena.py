@@ -80,6 +80,12 @@ def load_target(slug):
         die(f"no target '{slug}'. Available: {', '.join(avail) or '(none)'}")
     t = json.loads(path.read_text())
     t["_dir"], t["_slug"] = path.parent, slug
+    if t.get("status") == "blocked":
+        blockers = t.get("blockers", [])
+        hard = [b for b in blockers if b.get("severity") == "hard"]
+        die(f"target '{slug}' is blocked and cannot be measured yet.\n" +
+            "".join(f"    - {b['id']}: {b['what'][:150]}...\n" for b in hard) +
+            "    It is scaffolded so the work is visible, not to be run.")
     return t
 
 
@@ -374,10 +380,20 @@ def cmd_baseline(args):
     # A prompt whose argmax is a coin flip cannot test anything: it would fail
     # honest submissions at random. Screen it out here, loudly, and record what
     # was dropped — silently shrinking the gate would be much worse.
+    # Prompts with a previously OBSERVED flip stay excluded regardless of what
+    # this run sees. Stability evidence accumulates; a single clean screen does
+    # not overturn a recorded flip, and a mostly-stable prompt is the dangerous
+    # kind — it fails an honest submission occasionally and reads as a
+    # regression.
+    known_bad = target.get("knownUnstablePrompts", {})
     stable, unstable = {}, {}
     for r in arms[0]["prompts"]:
         seen = {a_r["sha256"] for a in arms for a_r in a["prompts"] if a_r["id"] == r["id"]}
-        if len(seen) == 1:
+        if r["id"] in known_bad:
+            unstable[r["id"]] = sorted(seen)
+            Out.warn(f"{r['id']}: excluded by knownUnstablePrompts "
+                     f"({known_bad[r['id']].get('note', '')[:60]}...)")
+        elif len(seen) == 1:
             stable[r["id"]] = {"sha256": r["sha256"],
                                "completionTokens": r["completionTokens"],
                                "promptTokens": r["promptTokens"]}

@@ -3,10 +3,8 @@
   "name": "Qwen3.6 27B NVFP4",
   "recipe": "qwen3-6-27b-nvfp4",
   "recipeUrl": "https://howtospark.com/recipes/qwen3-6-27b-nvfp4",
-  "recipeNote": "`recipe` is a howtospark.com recipe SLUG, not a URL — it is the join key, and the site refuses to ingest a target naming a recipe that does not exist.",
-
-  "why": "Chosen as target 01 because its cross-boot determinism is MEASURED, not assumed. On 2026-07-28 this exact model and pinned config produced byte-identical greedy output across three separate boots, twice over — once with --enforce-eager and once with cudagraphs on. Gates 2 and 3 compare two server processes, so that property is the precondition for ranking anything on this engine at all.",
-
+  "recipeNote": "`recipe` is a howtospark.com recipe SLUG, not a URL \u2014 it is the join key, and the site refuses to ingest a target naming a recipe that does not exist.",
+  "why": "Chosen as target 01 because its cross-boot determinism is MEASURED, not assumed. On 2026-07-28 this exact model and pinned config produced byte-identical greedy output across three separate boots, twice over \u2014 once with --enforce-eager and once with cudagraphs on. Gates 2 and 3 compare two server processes, so that property is the precondition for ranking anything on this engine at all.",
   "model": "~/models/hf/Qwen3.6-27B-NVFP4",
   "servedModelName": "arena",
   "seed": 0,
@@ -15,20 +13,34 @@
   "heldOutMaxTokens": 384,
   "cacheRoot": "~/.cache/vllm-arena",
   "startupTimeout": 1800,
-
   "serveArgs": [
-    "--served-model-name", "arena",
-    "--max-model-len", "8192",
-    "--gpu-memory-utilization", "0.85",
-    "--kv-cache-memory-bytes", "8589934592",
-    "--max-num-seqs", "1",
-    "--max-num-batched-tokens", "8192"
+    "--served-model-name",
+    "arena",
+    "--max-model-len",
+    "8192",
+    "--gpu-memory-utilization",
+    "0.85",
+    "--kv-cache-memory-bytes",
+    "8589934592",
+    "--max-num-seqs",
+    "1",
+    "--max-num-batched-tokens",
+    "8192"
   ],
   "serveArgsNote": "Every one of these is a determinism pin, not a tuning choice, and changing any of them invalidates the goldens. --max-num-seqs 1 sets the profiling batch shape and is the prime suspect for the earlier cross-boot failure (batch shape already flips the argmax on this part at n=2); --kv-cache-memory-bytes stops the pool being sized from profiled free memory, which would change block count and therefore attention tiling; --max-model-len and --gpu-memory-utilization pin the rest of the profiling shape. Cudagraphs are deliberately LEFT ON: measured identical across boots either way, so the arena does not have to pay --enforce-eager.",
-
   "referenceHashes": {
-    "note": "First 16 hex of the sha256 of a fixed 192-token greedy completion, measured 2026-07-28 on spark-05cc, 3 boots each. Recorded as provenance for the determinism claim — the target's real goldens live in goldens.json and are produced by `baseline`.",
+    "note": "First 16 hex of the sha256 of a fixed 192-token greedy completion, measured 2026-07-28 on spark-05cc, 3 boots each. Recorded as provenance for the determinism claim \u2014 the target's real goldens live in goldens.json and are produced by `baseline`.",
     "cudagraphs": "b0d73d4ab0100305",
     "enforceEager": "5d7bc1f63794ef79"
+  },
+  "knownUnstablePrompts": {
+    "c-code-2k": {
+      "observed": [
+        "ad33fd5a829a",
+        "c0f7047ad777"
+      ],
+      "on": "2026-07-28",
+      "note": "Flipped between two hashes across warm boots in one 4-boot run, then came back stable across the next 3. A prompt that is MOSTLY stable is the dangerous kind: it would fail an honest submission occasionally and look like a real regression. Evidence accumulates \u2014 one clean screen does not erase an observed flip, so this stays excluded until several more boots say otherwise."
+    }
   }
 }

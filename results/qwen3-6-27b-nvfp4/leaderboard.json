@@ -1,0 +1,27 @@
+{
+  "contractVersion": 1,
+  "target": "qwen3-6-27b-nvfp4",
+  "targetName": "Qwen3.6 27B NVFP4",
+  "recipe": "qwen3-6-27b-nvfp4",
+  "engine": "vllm",
+  "hardware": "NVIDIA DGX Spark",
+  "vendorPin": "vllm 0.26.0",
+  "repoUrl": "https://github.com/Sapid-Labs/vllm-spark-arena",
+  "origin": {
+    "recordedAt": "2026-07-29T00:56:51+00:00",
+    "node": "spark-05cc",
+    "buildInfo": "vllm 0.26.0",
+    "decodeTps": 12.3385,
+    "prefillTps": 662.755,
+    "note": "Screened: 3 measured boots after a discarded cache-warmup boot."
+  },
+  "current": {
+    "decodeTps": 12.3385,
+    "prefillTps": 662.755,
+    "cumulativeDecodeSpeedup": 1.0,
+    "cumulativePrefillSpeedup": 1.0,
+    "cumulativeScore": 1.0,
+    "promotionCount": 0
+  },
+  "promotions": []
+}

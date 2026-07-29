@@ -1,0 +1,168 @@
+{
+  "contractVersion": 1,
+  "wheel": "0.26.0",
+  "recordedAt": "2026-07-29T00:56:51+00:00",
+  "node": "spark-05cc",
+  "modelFingerprint": "d1e907c3c13e1468774c9c82733f82a620e2ad40d5e5ebfc9b8c05a4c11b7ab2",
+  "decodeTps": 12.3385,
+  "prefillTps": 662.755,
+  "arms": [
+    {
+      "label": "baseline",
+      "patch": null,
+      "at": "2026-07-29T00:42:12+00:00",
+      "tempStartC": 46.0,
+      "tempEndC": 62.0,
+      "powerEndW": 14.62,
+      "prompts": [
+        {
+          "text": "Here's a thinking process:\n\n1.  **Understand User Request:**\n   - Complete a Python module with a specific function `infer_column(values)`.\n   - The function should infer the narrowest type that holds every value: `int`, `float`, `bool`, or `str`.\n   - Add `unittest` test cases for each function.\n   - Output only code, no prose.\n   - The module already has imports and a `Column` dataclass.\n\n2.  **Analyze `infer_column(values)`:**\n   - Input: `values` - likely an iterable of strings (since it's about inferring types from data, probably CSV-like).\n   - Output: A type (`int`, `float`, `bool`, or `str`).\n   - Logic: Try to convert all values to `bool`, then `int`, then `float`, then default to `str`. Wait, the order matters. \"Narrowest type\" usually means: if all can be `int`, return `int`. If not, try `float`. If not, try `bool`. If not, `str`. But wait, `bool` is a subclass of `int` in Python, so we",
+          "sha256": "efc4efe865b11fa596c30f6602a3c2fdcf3c567673e58d058d78ca58754f3f64",
+          "promptTokens": 93,
+          "completionTokens": 256,
+          "ttftSeconds": 0.2937,
+          "decodeTps": 12.386,
+          "prefillTps": 316.68,
+          "id": "a-code-short"
+        },
+        {
+          "text": "Here's a thinking process:\n\n1.  **Deconstruct the User Prompt:**\n   - **Topic:** Mixture-of-Experts (MoE) models\n   - **Phases:** Decode vs. Prefill\n   - **Observation:** Decode throughput tracks weight file size almost exactly; prefill throughput does not.\n   - **Requirements:** \n     - Explain in careful technical prose\n     - Work through arithmetic intensity of each phase\n     - Explain what changes when only 8 of 256 experts fire per token\n   - **Key Concepts:** Bandwidth-bound, arithmetic intensity, decode vs prefill, MoE routing, expert activation, memory bandwidth, compute vs memory bound.\n\n2.  **Define Key Terms & Concepts:**\n   - **MoE Model:** Neural network where each layer contains multiple \"experts\" (sub-networks), and a routing mechanism selects a subset to process each token.\n   - **Prefill Phase:** Processing the entire input context at once. High parallelism, compute-heavy, typically compute-bound or memory-bandwidth-bound depending on model size and batch size.\n   - **Decode Phase:** Autoregressive generation, one token at a time. Low parallelism per step, memory-bound due",
+          "sha256": "f1ed7adadcdd40091af0f2fd97078247de8ab402e2609f8c24590739c3b8d408",
+          "promptTokens": 73,
+          "completionTokens": 256,
+          "ttftSeconds": 0.3084,
+          "decodeTps": 12.367,
+          "prefillTps": 236.68,
+          "id": "b-prose-short"
+        },
+        {
+          "text": "The user wants me to complete a Python module that includes a function `infer_column(values)` which infers the narrowest type (int, float, bool, or str) that can hold every value in the input list.\nThen I need to add unittest test cases for each function.\nThe output should only be code, no prose.\n\nLet's break down `infer_column(values)`:\n- Input: a list of values.\n- Output: a type (int, float, bool, or str).\n- Logic:\n  - If all values are bools, return bool.\n  - If all values are ints, return int.\n  - If all values are floats, return float.\n  - Otherwise, return str.\n  - Wait, what about mixed types? The prompt says \"narrowest type that holds every value\". So if there's a mix of int and float, it should be float. If there's a mix of int and str, it should be str.\n  - Actually, Python's `bool` is a subclass of `int`, so `isinstance(True, int)` is True. We need to handle bools carefully.\n  - Let's check types of each value.\n",
+          "sha256": "ad33fd5a829aea89ce3196450fb3dc2426e84bbfd6142becf5354f5e709bd69d",
+          "promptTokens": 1715,
+          "completionTokens": 256,
+          "ttftSeconds": 1.7456,
+          "decodeTps": 12.31,
+          "prefillTps": 982.45,
+          "id": "c-code-2k"
+        },
+        {
+          "text": "Here's a thinking process:\n\n1.  **Analyze User Input:**\n   - The input consists of 105 entries (Entry 0 to Entry 104).\n   - Every single entry is *identical*: \"The unified memory architecture of the GB10 changes how model placement is reasoned about, because weights, activations and the KV cache all draw on one 128 GB pool instead of shuttling across a bus. A kernel that saves bandwidth therefore saves the whole system, not just the GPU.\"\n   - The task: Summarize the entries in exactly five bullet points, then explain what a CUDA kernel author should conclude from them about where to spend effort on this part.\n\n2.  **Identify Key Information in the Text:**\n   - Architecture: GB10 (likely NVIDIA's next-gen GPU, though the exact name isn't critical, it's a hypothetical/future chip with unified memory).\n   - Feature: Unified memory architecture.\n   - Capacity: 128 GB pool.\n   - Components sharing memory: Weights, activations, KV cache.\n   - Change in reasoning: No longer need to shuttle data across a bus (like PCIe) between separate memory pools",
+          "sha256": "c5f8b3c6825310877a723d7f826907958ecfb38c75a33b4faee0ab54385513f8",
+          "promptTokens": 6863,
+          "completionTokens": 256,
+          "ttftSeconds": 5.8994,
+          "decodeTps": 12.207,
+          "prefillTps": 1163.35,
+          "id": "d-doc-8k"
+        }
+      ],
+      "decodeTps": 12.3385,
+      "prefillTps": 649.565
+    },
+    {
+      "label": "baseline",
+      "patch": null,
+      "at": "2026-07-29T00:49:40+00:00",
+      "tempStartC": 46.0,
+      "tempEndC": 61.0,
+      "powerEndW": 14.77,
+      "prompts": [
+        {
+          "text": "Here's a thinking process:\n\n1.  **Understand User Request:**\n   - Complete a Python module with a specific function `infer_column(values)`.\n   - The function should infer the narrowest type that holds every value: `int`, `float`, `bool`, or `str`.\n   - Add `unittest` test cases for each function.\n   - Output only code, no prose.\n   - The module already has imports and a `Column` dataclass.\n\n2.  **Analyze `infer_column(values)`:**\n   - Input: `values` - likely an iterable of strings (since it's about inferring types from data, probably CSV-like).\n   - Output: A type (`int`, `float`, `bool`, or `str`).\n   - Logic: Try to convert all values to `bool`, then `int`, then `float`, then default to `str`. Wait, the order matters. \"Narrowest type\" usually means: if all can be `int`, return `int`. If not, try `float`. If not, try `bool`. If not, `str`. But wait, `bool` is a subclass of `int` in Python, so we",
+          "sha256": "efc4efe865b11fa596c30f6602a3c2fdcf3c567673e58d058d78ca58754f3f64",
+          "promptTokens": 93,
+          "completionTokens": 256,
+          "ttftSeconds": 0.2843,
+          "decodeTps": 12.387,
+          "prefillTps": 327.13,
+          "id": "a-code-short"
+        },
+        {
+          "text": "Here's a thinking process:\n\n1.  **Deconstruct the User Prompt:**\n   - **Topic:** Mixture-of-Experts (MoE) models\n   - **Phases:** Decode vs. Prefill\n   - **Observation:** Decode throughput tracks weight file size almost exactly; prefill throughput does not.\n   - **Requirements:** \n     - Explain in careful technical prose\n     - Work through arithmetic intensity of each phase\n     - Explain what changes when only 8 of 256 experts fire per token\n   - **Key Concepts:** Bandwidth-bound, arithmetic intensity, decode vs prefill, MoE routing, expert activation, memory bandwidth, compute vs memory bound.\n\n2.  **Define Key Terms & Concepts:**\n   - **MoE Model:** Neural network where each layer contains multiple \"experts\" (sub-networks), and a routing mechanism selects a subset to process each token.\n   - **Prefill Phase:** Processing the entire input context at once. High parallelism, compute-heavy, typically compute-bound or memory-bandwidth-bound depending on model size and batch size.\n   - **Decode Phase:** Autoregressive generation, one token at a time. Low parallelism per step, memory-bound due",
+          "sha256": "f1ed7adadcdd40091af0f2fd97078247de8ab402e2609f8c24590739c3b8d408",
+          "promptTokens": 73,
+          "completionTokens": 256,
+          "ttftSeconds": 0.3143,
+          "decodeTps": 12.37,
+          "prefillTps": 232.25,
+          "id": "b-prose-short"
+        },
+        {
+          "text": "The user wants me to complete a Python module that includes a function `infer_column(values)` which infers the narrowest type (int, float, bool, or str) that can hold every value in the input list.\nThen I need to add unittest test cases for each function.\nThe output should only be code, no prose.\n\nLet's break down `infer_column(values)`:\n- Input: a list of values.\n- Output: a type (int, float, bool, or str).\n- Logic:\n  - If all values are bools, return bool.\n  - If all values are ints, return int.\n  - If all values are floats, return float.\n  - Otherwise, return str.\n  - Wait, what about mixed types? The prompt says \"narrowest type that holds every value\". So if there's a mix of int and float, it should be float. If there's a mix of int and str, it should be str.\n  - Actually, Python's `bool` is a subclass of `int`, so `isinstance(True, int)` is True. We need to handle bools carefully.\n  - Let's check types of each value.\n",
+          "sha256": "ad33fd5a829aea89ce3196450fb3dc2426e84bbfd6142becf5354f5e709bd69d",
+          "promptTokens": 1715,
+          "completionTokens": 256,
+          "ttftSeconds": 1.7178,
+          "decodeTps": 12.31,
+          "prefillTps": 998.38,
+          "id": "c-code-2k"
+        },
+        {
+          "text": "Here's a thinking process:\n\n1.  **Analyze User Input:**\n   - The input consists of 105 entries (Entry 0 to Entry 104).\n   - Every single entry is *identical*: \"The unified memory architecture of the GB10 changes how model placement is reasoned about, because weights, activations and the KV cache all draw on one 128 GB pool instead of shuttling across a bus. A kernel that saves bandwidth therefore saves the whole system, not just the GPU.\"\n   - The task: Summarize the entries in exactly five bullet points, then explain what a CUDA kernel author should conclude from them about where to spend effort on this part.\n\n2.  **Identify Key Information in the Text:**\n   - Architecture: GB10 (likely NVIDIA's next-gen GPU, though the exact name isn't critical, it's a hypothetical/future chip with unified memory).\n   - Feature: Unified memory architecture.\n   - Capacity: 128 GB pool.\n   - Components sharing memory: Weights, activations, KV cache.\n   - Change in reasoning: No longer need to shuttle data across a bus (like PCIe) between separate memory pools",
+          "sha256": "c5f8b3c6825310877a723d7f826907958ecfb38c75a33b4faee0ab54385513f8",
+          "promptTokens": 6863,
+          "completionTokens": 256,
+          "ttftSeconds": 5.911,
+          "decodeTps": 12.205,
+          "prefillTps": 1161.05,
+          "id": "d-doc-8k"
+        }
+      ],
+      "decodeTps": 12.34,
+      "prefillTps": 662.755
+    },
+    {
+      "label": "baseline",
+      "patch": null,
+      "at": "2026-07-29T00:56:48+00:00",
+      "tempStartC": 46.0,
+      "tempEndC": 61.0,
+      "powerEndW": 14.61,
+      "prompts": [
+        {
+          "text": "Here's a thinking process:\n\n1.  **Understand User Request:**\n   - Complete a Python module with a specific function `infer_column(values)`.\n   - The function should infer the narrowest type that holds every value: `int`, `float`, `bool`, or `str`.\n   - Add `unittest` test cases for each function.\n   - Output only code, no prose.\n   - The module already has imports and a `Column` dataclass.\n\n2.  **Analyze `infer_column(values)`:**\n   - Input: `values` - likely an iterable of strings (since it's about inferring types from data, probably CSV-like).\n   - Output: A type (`int`, `float`, `bool`, or `str`).\n   - Logic: Try to convert all values to `bool`, then `int`, then `float`, then default to `str`. Wait, the order matters. \"Narrowest type\" usually means: if all can be `int`, return `int`. If not, try `float`. If not, try `bool`. If not, `str`. But wait, `bool` is a subclass of `int` in Python, so we",
+          "sha256": "efc4efe865b11fa596c30f6602a3c2fdcf3c567673e58d058d78ca58754f3f64",
+          "promptTokens": 93,
+          "completionTokens": 256,
+          "ttftSeconds": 0.2866,
+          "decodeTps": 12.368,
+          "prefillTps": 324.52,
+          "id": "a-code-short"
+        },
+        {
+          "text": "Here's a thinking process:\n\n1.  **Deconstruct the User Prompt:**\n   - **Topic:** Mixture-of-Experts (MoE) models\n   - **Phases:** Decode vs. Prefill\n   - **Observation:** Decode throughput tracks weight file size almost exactly; prefill throughput does not.\n   - **Requirements:** \n     - Explain in careful technical prose\n     - Work through arithmetic intensity of each phase\n     - Explain what changes when only 8 of 256 experts fire per token\n   - **Key Concepts:** Bandwidth-bound, arithmetic intensity, decode vs prefill, MoE routing, expert activation, memory bandwidth, compute vs memory bound.\n\n2.  **Define Key Terms & Concepts:**\n   - **MoE Model:** Neural network where each layer contains multiple \"experts\" (sub-networks), and a routing mechanism selects a subset to process each token.\n   - **Prefill Phase:** Processing the entire input context at once. High parallelism, compute-heavy, typically compute-bound or memory-bandwidth-bound depending on model size and batch size.\n   - **Decode Phase:** Autoregressive generation, one token at a time. Low parallelism per step, memory-bound due",
+          "sha256": "f1ed7adadcdd40091af0f2fd97078247de8ab402e2609f8c24590739c3b8d408",
+          "promptTokens": 73,
+          "completionTokens": 256,
+          "ttftSeconds": 0.2784,
+          "decodeTps": 12.349,
+          "prefillTps": 262.24,
+          "id": "b-prose-short"
+        },
+        {
+          "text": "The user wants me to complete a Python module that includes a function `infer_column(values)` which infers the narrowest type (int, float, bool, or str) that can hold every value in the input list.\nThen I need to add unittest test cases for each function.\nThe output should only be code, no prose.\n\nLet's break down `infer_column(values)`:\n- Input: a list of values.\n- Output: a type (int, float, bool, or str).\n- Logic:\n  - If all values are bools, return bool.\n  - If all values are ints, return int.\n  - If all values are floats, return float.\n  - Otherwise, return str.\n  - Wait, what about mixed types? The prompt says \"narrowest type that holds every value\". So if there's a mix of int and float, it should be float. If there's a mix of int and str, it should be str.\n  - Actually, Python's `bool` is a subclass of `int`, so `isinstance(True, int)` is True. We need to handle bools carefully.\n  - Let's check types of each value.\n",
+          "sha256": "ad33fd5a829aea89ce3196450fb3dc2426e84bbfd6142becf5354f5e709bd69d",
+          "promptTokens": 1715,
+          "completionTokens": 256,
+          "ttftSeconds": 1.6991,
+          "decodeTps": 12.291,
+          "prefillTps": 1009.33,
+          "id": "c-code-2k"
+        },
+        {
+          "text": "Here's a thinking process:\n\n1.  **Analyze User Input:**\n   - The input consists of 105 entries (Entry 0 to Entry 104).\n   - Every single entry is *identical*: \"The unified memory architecture of the GB10 changes how model placement is reasoned about, because weights, activations and the KV cache all draw on one 128 GB pool instead of shuttling across a bus. A kernel that saves bandwidth therefore saves the whole system, not just the GPU.\"\n   - The task: Summarize the entries in exactly five bullet points, then explain what a CUDA kernel author should conclude from them about where to spend effort on this part.\n\n2.  **Identify Key Information in the Text:**\n   - Architecture: GB10 (likely NVIDIA's next-gen GPU, though the exact name isn't critical, it's a hypothetical/future chip with unified memory).\n   - Feature: Unified memory architecture.\n   - Capacity: 128 GB pool.\n   - Components sharing memory: Weights, activations, KV cache.\n   - Change in reasoning: No longer need to shuttle data across a bus (like PCIe) between separate memory pools",
+          "sha256": "c5f8b3c6825310877a723d7f826907958ecfb38c75a33b4faee0ab54385513f8",
+          "promptTokens": 6863,
+          "completionTokens": 256,
+          "ttftSeconds": 5.8905,
+          "decodeTps": 12.189,
+          "prefillTps": 1165.1,
+          "id": "d-doc-8k"
+        }
+      ],
+      "decodeTps": 12.32,
+      "prefillTps": 666.925
+    }
+  ],
+  "note": "Absolutes are for the record. Scoring uses paired ratios measured in one session \u2014 a baseline from another day is not comparable."
+}

@@ -1,0 +1,30 @@
+{
+  "contractVersion": 1,
+  "wheel": "0.26.0",
+  "recordedAt": "2026-07-29T00:56:49+00:00",
+  "boots": 3,
+  "prompts": {
+    "a-code-short": {
+      "sha256": "efc4efe865b11fa596c30f6602a3c2fdcf3c567673e58d058d78ca58754f3f64",
+      "completionTokens": 256,
+      "promptTokens": 93
+    },
+    "b-prose-short": {
+      "sha256": "f1ed7adadcdd40091af0f2fd97078247de8ab402e2609f8c24590739c3b8d408",
+      "completionTokens": 256,
+      "promptTokens": 73
+    },
+    "c-code-2k": {
+      "sha256": "ad33fd5a829aea89ce3196450fb3dc2426e84bbfd6142becf5354f5e709bd69d",
+      "completionTokens": 256,
+      "promptTokens": 1715
+    },
+    "d-doc-8k": {
+      "sha256": "c5f8b3c6825310877a723d7f826907958ecfb38c75a33b4faee0ab54385513f8",
+      "completionTokens": 256,
+      "promptTokens": 6863
+    }
+  },
+  "excluded": {},
+  "excludedNote": "Prompts whose greedy output was not identical across every measured boot. They are recorded rather than deleted: an excluded prompt is evidence about this model's numerical stability, and the gate must not silently shrink."
+}
