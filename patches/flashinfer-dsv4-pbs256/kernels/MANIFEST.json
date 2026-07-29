@@ -1,0 +1,10 @@
+{
+  "package": "flashinfer",
+  "version": "0.6.14",
+  "note": "sha256 of the UPSTREAM file each owned file was derived from. setup verifies these before building the overlay. If upstream changes, the hash mismatches and the build stops \u2014 because silently keeping our copy would revert whatever upstream fixed, which is exactly how a patch stack rots.",
+  "files": {
+    "csrc/sparse_mla_sm120_decode_dsv4.cu": {
+      "upstreamSha256": "d8f22ccabee2cc045b0f9b7da6323b8cdd4e7bf5bef49c43a65e6b474a843f65"
+    }
+  }
+}

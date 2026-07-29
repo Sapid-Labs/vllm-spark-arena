@@ -86,16 +86,52 @@ not on this patch.
 Speed at 256 is also unmeasured. A wider page changes the access pattern; it
 could be slower. Nothing here claims otherwise.
 
-## Applying it
+## Applying it — nothing in site-packages is touched
 
-The patch edits files inside `site-packages`, so a reinstall of flashinfer
-removes it:
+Put this directory on `PYTHONPATH`. That is all, and it is what the harness does
+for a candidate arm:
 
 ```bash
-cd ~/venvs/vllm-026/lib/python3.12/site-packages
-patch -p1 < .../dsv4-pbs256.patch
-# flashinfer rebuilds the changed translation unit on next use (~7 s incremental)
+PYTHONPATH=patches/flashinfer-dsv4-pbs256 vllm serve ...
 ```
 
-Upstream is the right home for this. It is a flashinfer change, it is small, and
-every GB10 owner needs it.
+`sitecustomize.py` then does two things at interpreter startup:
+
+1. Builds a **symlink farm** over the installed wheel's `csrc` (171 files linked,
+   1 owned by this submission) and rebinds `jit_env.FLASHINFER_CSRC_DIR` to it.
+   flashinfer compiles from the overlay.
+2. Widens the Python dispatch guard by rebinding
+   `_DECODE_DSV4_PAGE_BLOCK_SIZE` to an `int` subclass that compares equal to
+   both 64 and 256, so both call sites widen without copying upstream function
+   bodies.
+
+Verified 2026-07-28 with `site-packages` **completely stock** — both the `.cu`
+and the `.py` restored to their shipped contents:
+
+```
+csrc in use: /tmp/arena-overlay/csrc
+dispatchable@64: True   @128: False   @256: True
+kernels in the built .so: 15 @256, 15 @64
+64 vs 256 partials: 0 differing
+```
+
+`dsv4-pbs256.patch` is kept only as a human-readable diff of what changed. It is
+not the delivery mechanism.
+
+### Why this shape
+
+An edit inside `site-packages` works exactly once — a reinstall reverts it,
+nothing is versioned, and two such changes cannot be composed or reviewed. The
+overlay makes kernel wins **compound**: the incumbent is the accumulated set of
+owned files, a new submission owns more files or newer versions of them, and
+promotion appends. That mirrors the llama.cpp arena, where the incumbent is an
+accumulated diff against a pinned tree.
+
+`kernels/MANIFEST.json` is the safety property. It pins the sha256 of the
+*upstream original* each owned file was derived from, and the overlay refuses to
+build if the installed wheel no longer matches. Without that check, carrying our
+copy forward would silently revert whatever upstream fixed in that file — which
+is precisely how a patch stack rots.
+
+Upstream is still the right home for the change itself. It is a flashinfer
+change, it is small, and every GB10 owner needs it.
