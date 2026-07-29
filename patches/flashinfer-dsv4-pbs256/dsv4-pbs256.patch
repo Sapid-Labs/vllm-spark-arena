@@ -1,0 +1,123 @@
+--- a/flashinfer/data/csrc/sparse_mla_sm120_decode_dsv4.cu
++++ b/flashinfer/data/csrc/sparse_mla_sm120_decode_dsv4.cu
+@@ -132,8 +132,17 @@
+ }
+ 
+ // Public surface — explicit instantiation switch over the PR-body bench grid.
+-// DSV4 only, page_block_size=64 only. NUM_HEADS ∈ {8, 16, 32, 64, 128},
+-// TOPK ∈ {128, 512, 1024}.
++// DSV4 only. NUM_HEADS ∈ {8, 16, 32, 64, 128}, TOPK ∈ {128, 512, 1024},
++// PAGE_BLOCK_SIZE ∈ {64, 256}.
++//
++// 256 added for GB10/sm_121: vLLM DeepseekV4IndexerBackend declares exactly
++// [256] as its supported kernel block size, while this launcher only ever
++// instantiated 64 — two hard-coded integers that no serve flag can reconcile,
++// which is what blocks DeepSeek-V4 on stock vLLM here. The kernel itself has
++// no page-size limit: PAGE_BLOCK_SIZE only feeds index decomposition
++// (idx / pbs, idx % pbs), and the extra-KV section already runs a RUNTIME pbs
++// of 2. Shared memory is sized from DSV4_BI, not from the page size, so a
++// wider page costs no smem.
+ bool launch_sparse_mla_decode_dsv4(ModelType mt, int num_heads, int topk, int page_block_size,
+                                    int num_tokens, int num_splits, const bf16* Q,
+                                    const uint8_t* KV_cache, const int32_t* indices, bf16* mid_out,
+@@ -143,31 +152,47 @@
+                                    const int* extra_topk_length, int extra_topk, int pbs_extra,
+                                    size_t stride_extra_kv_block, int chunks_per_block_override,
+                                    float sm_scale, size_t stride_kv_block, cudaStream_t stream) {
+-  if (mt != ModelType::DSV4 || page_block_size != 64) return false;
++  if (mt != ModelType::DSV4) return false;
++  if (page_block_size != 64 && page_block_size != 256) return false;
+   if (num_splits <= 0) return false;
+-#define DSV4_DISPATCH(H, K)                                                                 \
+-  if (num_heads == (H) && topk == (K)) {                                                    \
+-    return launch_decode_dsv4_impl<ModelType::DSV4, (H), (K), 64>(                          \
++#define DSV4_DISPATCH(H, K, PBS)                                                            \
++  if (num_heads == (H) && topk == (K) && page_block_size == (PBS)) {                        \
++    return launch_decode_dsv4_impl<ModelType::DSV4, (H), (K), (PBS)>(                       \
+         Q, KV_cache, indices, mid_out, mid_lse, topk_length, output, out_lse, attn_sink,    \
+         extra_KV_cache, extra_indices, extra_topk_length, extra_topk, pbs_extra,            \
+         stride_extra_kv_block, num_tokens, num_splits, chunks_per_block_override, sm_scale, \
+         stride_kv_block, stream);                                                           \
+   }
+-  DSV4_DISPATCH(8, 128)
+-  DSV4_DISPATCH(8, 512)
+-  DSV4_DISPATCH(8, 1024)
+-  DSV4_DISPATCH(16, 128)
+-  DSV4_DISPATCH(16, 512)
+-  DSV4_DISPATCH(16, 1024)
+-  DSV4_DISPATCH(32, 128)
+-  DSV4_DISPATCH(32, 512)
+-  DSV4_DISPATCH(32, 1024)
+-  DSV4_DISPATCH(64, 128)
+-  DSV4_DISPATCH(64, 512)
+-  DSV4_DISPATCH(64, 1024)
+-  DSV4_DISPATCH(128, 128)
+-  DSV4_DISPATCH(128, 512)
+-  DSV4_DISPATCH(128, 1024)
++  DSV4_DISPATCH(8, 128, 64)
++  DSV4_DISPATCH(8, 128, 256)
++  DSV4_DISPATCH(8, 512, 64)
++  DSV4_DISPATCH(8, 512, 256)
++  DSV4_DISPATCH(8, 1024, 64)
++  DSV4_DISPATCH(8, 1024, 256)
++  DSV4_DISPATCH(16, 128, 64)
++  DSV4_DISPATCH(16, 128, 256)
++  DSV4_DISPATCH(16, 512, 64)
++  DSV4_DISPATCH(16, 512, 256)
++  DSV4_DISPATCH(16, 1024, 64)
++  DSV4_DISPATCH(16, 1024, 256)
++  DSV4_DISPATCH(32, 128, 64)
++  DSV4_DISPATCH(32, 128, 256)
++  DSV4_DISPATCH(32, 512, 64)
++  DSV4_DISPATCH(32, 512, 256)
++  DSV4_DISPATCH(32, 1024, 64)
++  DSV4_DISPATCH(32, 1024, 256)
++  DSV4_DISPATCH(64, 128, 64)
++  DSV4_DISPATCH(64, 128, 256)
++  DSV4_DISPATCH(64, 512, 64)
++  DSV4_DISPATCH(64, 512, 256)
++  DSV4_DISPATCH(64, 1024, 64)
++  DSV4_DISPATCH(64, 1024, 256)
++  DSV4_DISPATCH(128, 128, 64)
++  DSV4_DISPATCH(128, 128, 256)
++  DSV4_DISPATCH(128, 512, 64)
++  DSV4_DISPATCH(128, 512, 256)
++  DSV4_DISPATCH(128, 1024, 64)
++  DSV4_DISPATCH(128, 1024, 256)
+ #undef DSV4_DISPATCH
+   return false;
+ }
+--- a/flashinfer/mla/_sparse_mla_sm120.py
++++ b/flashinfer/mla/_sparse_mla_sm120.py
+@@ -96,6 +96,13 @@
+     }
+ )
+ _DECODE_DSV4_PAGE_BLOCK_SIZE = 64
++# GB10/sm_121: vLLM DeepseekV4IndexerBackend declares exactly [256], so 64 alone
++# makes DeepSeek-V4 undispatchable there and decode falls through to the prefill
++# orchestrator, which then asserts num_tokens > 64 — a condition single-user
++# decode never meets. The kernel is generic over page size (it only does
++# idx / pbs and idx % pbs, and the extra-KV section already runs a runtime pbs
++# of 2), so the launcher now instantiates 256 as well.
++_DECODE_DSV4_PAGE_BLOCK_SIZES = frozenset({64, 256})
+ 
+ # decode-dsv3_2 instantiation set.
+ _DECODE_DSV3_2_DISPATCH = frozenset(
+@@ -245,7 +252,7 @@
+     return (
+         num_tokens <= _DECODE_MAX_TOKENS
+         and d_qk == 512
+-        and page_block_size == _DECODE_DSV4_PAGE_BLOCK_SIZE
++        and page_block_size in _DECODE_DSV4_PAGE_BLOCK_SIZES
+         and (num_heads, topk) in _DECODE_DSV4_DISPATCH
+     )
+ 
+@@ -323,7 +330,7 @@
+         extra_topk = int(extra_indices.size(-1)) if extra_indices is not None else 0
+         if (
+             model_type == _MODEL_TYPE_DSV4
+-            and kv_pbs == _DECODE_DSV4_PAGE_BLOCK_SIZE
++            and kv_pbs in _DECODE_DSV4_PAGE_BLOCK_SIZES
+             and _decode_dsv4_dispatchable(
+                 num_tokens, num_heads, topk, d_qk, kv_pbs, extra_topk
+             )
