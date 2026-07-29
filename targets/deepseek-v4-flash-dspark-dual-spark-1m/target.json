@@ -3,8 +3,8 @@
   "name": "DeepSeek V4 Flash DSpark \u2014 dual Spark, 1M context",
   "recipe": "deepseek-v4-flash-dspark-dual-spark-1m",
   "recipeUrl": "https://howtospark.com/recipes/deepseek-v4-flash-dspark-dual-spark-1m",
-  "status": "open",
-  "statusNote": "Unblocked 2026-07-29, not yet baselined. Both hard blockers are gone: the engine serves on stock vLLM 0.26.0 at --block-size 256 via the flashinfer overlay, and multi-node greedy determinism is now MEASURED rather than assumed. What remains is to record a baseline.",
+  "status": "blocked",
+  "statusNote": "Serves, decodes at 26.6 tok/s, and greedy output is provably identical across boots -- but it cannot hold a 4-boot baseline. Roughly half of all long TP2 runs deadlock inside a collective. That is the only thing left, and it is upstream of the arena.",
   "blockers": [
     {
       "id": "multi-node-determinism",
@@ -23,6 +23,21 @@
       "what": "ulimit -l was 8 MB on both nodes, so NCCL could not use RDMA and fell back to TCP sockets. A paired ratio measured over sockets is not the recipe's hardware.",
       "howFixed": "limits.d memlock unlimited on both nodes, verified as unlimited in the launch path itself rather than in a shell.",
       "trap": "The fix READ as failed for a day. Tailscale SSH terminates inside tailscaled and never runs pam_limits, so any ulimit taken over the tailnet reports systemd's 8 MB default no matter what limits.d says. Ray workers inherit whatever launched them, so a cluster started from a tailnet session gets 8 MB memlock on every raylet and NCCL silently falls back to sockets EVEN WITH THE ROOT FIX APPLIED. Launch the head via `ssh localhost` and the worker over its LAN address, and assert unlimited on both inside the script."
+    },
+    {
+      "id": "tp2-collective-deadlock",
+      "severity": "hard",
+      "opened": "2026-07-29",
+      "what": "About half of all long TP2 runs deadlock. Both ranks spin at 100% CPU while the GPUs draw ~14 W and one reports 0% utilisation -- a busy-wait inside a collective that never completes. It ends as `TimeoutError: RPC call to sample_tokens timed out` on whatever prompt happened to be in flight.",
+      "notTheCause": [
+        "NOT the interconnect. Every run today was verifiably on RoCE (NET/IB, 200 Gb/s virtual devices), which retires the earlier TCP-socket-fallback theory from 07-28.",
+        "NOT kernel JIT. The 37-minute hang logged ZERO new JIT events; the six in that boot all landed early and the run was fine after them.",
+        "NOT a prompt or a shape. b-prose-short is 64 tokens and decoded at 26.546 tok/s an hour earlier, then hung on a later boot under an identical config.",
+        "NOT memory. kv_cache_usage was 0.5% and the oom-guard never tripped."
+      ],
+      "evidence": "4 long runs on 2026-07-29: two baseline arms died on c-code-2k (at 10 and 167 output tokens), one full-length warm pass hung on b-prose-short for 37 min, and one 16-token warm pass completed all four shapes. Two full boots on the morning determinism probe also completed cleanly. So it is intermittent at roughly 50% per long run -- which makes P(4 clean boots) too low to record a baseline.",
+      "whyItBlocks": "A baseline needs 4 boots to agree. At this failure rate it will not finish, and a partial baseline is worse than none: it would define goldens from whichever prompts happened to survive.",
+      "nextStep": "Bisect the deadlock outside the arena: try --enforce-eager (removes cudagraph capture from the collective path), then --distributed-executor-backend mp instead of ray, then NCCL_ASYNC_ERROR_HANDLING/NCCL_BLOCKING_WAIT to convert the busy-wait into a diagnosable abort. Capture py-spy dumps of both ranks mid-hang -- that names the stalled collective, which nothing measured so far does."
     },
     {
       "id": "oom-guard-headroom",
