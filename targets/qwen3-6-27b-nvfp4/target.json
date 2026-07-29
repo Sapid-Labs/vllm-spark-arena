@@ -42,5 +42,12 @@
       "on": "2026-07-28",
       "note": "Flipped between two hashes across warm boots in one 4-boot run, then came back stable across the next 3. A prompt that is MOSTLY stable is the dangerous kind: it would fail an honest submission occasionally and look like a real regression. Evidence accumulates \u2014 one clean screen does not erase an observed flip, so this stays excluded until several more boots say otherwise."
     }
+  },
+  "weights": {
+    "hfRepo": "nvidia/Qwen3.6-27B-NVFP4",
+    "public": true,
+    "verifiedOn": "2026-07-29",
+    "verifiedHow": "Public NVIDIA repo \u2014 a contributor downloads the quantized checkpoint directly; no local quantization step exists for this target.",
+    "download": "hf download nvidia/Qwen3.6-27B-NVFP4 --local-dir ~/models/hf/Qwen3.6-27B-NVFP4"
   }
 }

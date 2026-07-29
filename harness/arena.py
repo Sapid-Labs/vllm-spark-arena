@@ -80,6 +80,18 @@ def load_target(slug):
         die(f"no target '{slug}'. Available: {', '.join(avail) or '(none)'}")
     t = json.loads(path.read_text())
     t["_dir"], t["_slug"] = path.parent, slug
+
+    # Hard rule: a target must point at weights a contributor can DOWNLOAD.
+    # Requiring a local quantization puts hours of work in front of someone's
+    # first line of code, and most people stop there.
+    w = t.get("weights")
+    if t.get("status") != "blocked" and (not w or not w.get("hfRepo")):
+        die(f"target '{slug}' declares no downloadable weights.\n"
+            f"    Add a weights block naming a PUBLIC Hugging Face repo, verified not gated\n"
+            f"    and not private. See policy.publicWeights.")
+    if w and not w.get("public", False):
+        Out.warn(f"{slug}: weights are NOT publicly downloadable — this must not be "
+                 f"anyone's entry point")
     if t.get("status") == "blocked":
         blockers = t.get("blockers", [])
         hard = [b for b in blockers if b.get("severity") == "hard"]

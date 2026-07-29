@@ -101,6 +101,8 @@
   },
   "policy": {
     "optimizationVsRecipe": "Optimizations preserve output and get the cheap gate. Changes that alter output (precision, quantization, sampling, speculation) are a new RECIPE on howtospark.com, not an arena submission, and need eval evidence.",
-    "configVsEngine": "Tuning serve FLAGS is a recipe, not a submission. This arena ranks changes to what the engine DOES with a fixed config -- dispatch, kernel selection, memory layout, scheduling."
+    "configVsEngine": "Tuning serve FLAGS is a recipe, not a submission. This arena ranks changes to what the engine DOES with a fixed config -- dispatch, kernel selection, memory layout, scheduling.",
+    "publicWeights": "EVERY target must point at weights a contributor can DOWNLOAD. No target may require someone to produce their own quantization. Same rule as the llama.cpp arena, and for the same reason: a download barrier in front of the arena costs more than any kernel win inside it.",
+    "publicWeightsEnforcement": "A target declares weights.hfRepo and weights.public. The harness refuses a target with no weights block. Verify with the HF API that the repo is neither gated nor private."
   }
 }
