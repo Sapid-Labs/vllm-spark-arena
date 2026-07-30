@@ -1,30 +1,30 @@
 {
   "contractVersion": 1,
   "wheel": "0.21.1rc1.dev339+g1967a5627bc3 (aidendle94/sparkrun-vllm-ds4-gb10:production-ready)",
-  "recordedAt": "2026-07-30T13:42:30+00:00",
+  "recordedAt": "2026-07-30T16:24:22+00:00",
   "boots": 3,
   "prompts": {
     "a-code-short": {
-      "sha256": "a1a2ca6075f26faf4e6f5c311c9fc242104c53db56491f334b3dfcd1b78522bc",
+      "sha256": "8507614e5b56c5a484ee9b0d09dd7e250a99025c472089271c3b0662bd2d5e0f",
       "completionTokens": 256,
       "promptTokens": 87
     },
     "b-prose-short": {
-      "sha256": "ad567b7110e34f8adc9b9525ba7fdddca739022747d426a50cde1eb286fe2551",
+      "sha256": "8f1d3c2061a8164d4d217c1cf69df67b7b04192291b6c22c9b6495bc7094ccf3",
       "completionTokens": 256,
       "promptTokens": 64
     },
     "c-code-2k": {
-      "sha256": "0685f61f5e17bac3617d1a64f8dbbbe235cb6a0461e0644b786f57a9cbcb82b8",
+      "sha256": "662fd99077f8b258e245e97d048571c037179b7c9420789b448858582726ab0c",
       "completionTokens": 256,
       "promptTokens": 1643
     }
   },
   "excluded": {
     "d-doc-8k": [
-      "6b553d2de6fce3b0e11b9d0e2262f6c0ad5da2baf0d9ce743bfbf7975a2434d1",
-      "9204b35103311232a8bb76f368902efe65d8830e7db363e55a3c7010271a7714",
-      "999998346aa829d7f16ecfb76ecdd23ebb6fdeaebc874e1a10cce38a2634c3dd"
+      "0a30bb1ffb87a86ad7ea128c3461756e8689679c7eb34df97d4195a36c6f684f",
+      "8199c594f035730dee82c7021bad7046baef6785902bf90a37785baab346143a",
+      "e73b9a6107c1ffcf31580e7db14ea3d483fd336a6da1132edf43e1ce7d2d317c"
     ]
   },
   "excludedNote": "Prompts whose greedy output was not identical across every measured boot. They are recorded rather than deleted: an excluded prompt is evidence about this model's numerical stability, and the gate must not silently shrink."

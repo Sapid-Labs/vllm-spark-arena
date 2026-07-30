@@ -1,167 +1,167 @@
 {
   "contractVersion": 1,
   "wheel": "0.21.1rc1.dev339+g1967a5627bc3 (aidendle94/sparkrun-vllm-ds4-gb10:production-ready)",
-  "recordedAt": "2026-07-30T13:42:30+00:00",
+  "recordedAt": "2026-07-30T16:24:22+00:00",
   "node": "spark-05cc",
   "modelFingerprint": "45b75074dac5ee4caf74480fe4c8daf4d628c7680c0d607d09a6d35e62959c40",
-  "decodeTps": 15.989999999999998,
-  "prefillTps": 980.5150000000001,
+  "decodeTps": 25.776000000000003,
+  "prefillTps": 926.53,
   "arms": [
     {
       "label": "baseline",
       "patch": null,
-      "at": "2026-07-30T13:32:14+00:00",
-      "tempStartC": 55.0,
-      "tempEndC": 55.0,
-      "powerEndW": 6.02,
-      "prompts": [
-        {
-          "text": "```python\nimport csv\nfrom dataclasses import dataclass\nimport unittest\nfrom typing import List, Optional\n\n@dataclass\nclass Column:\n    name: str\n    kind: type\n\ndef infer_column(values):\n    \"\"\"Infer the narrowest type that holds every value: int, float, bool, or str.\"\"\"\n    if not values:\n        return str\n    \n    # First check if all values are bool\n    all_bool = True\n    for v in values:\n        if v.lower() not in ('true', 'false', '1', '0', 'yes', 'no'):\n            all_bool = False\n            break\n    \n    if all_bool:\n        return bool\n    \n    # Check if all values are int\n    all_int = True\n    for v in values:\n        try:\n            int(v)\n        except (ValueError, TypeError):\n            all_int = False\n            break\n    \n    if all_int:\n        return int\n    \n    # Check if all values are float\n    all_float = True\n    for v in values:\n        try:\n            float(v)\n        except (ValueError, TypeError):\n            all_float = False\n            break\n    \n    if all_float:\n        return",
-          "sha256": "a1a2ca6075f26faf4e6f5c311c9fc242104c53db56491f334b3dfcd1b78522bc",
-          "promptTokens": 87,
-          "completionTokens": 256,
-          "ttftSeconds": 0.4177,
-          "decodeTps": 15.873,
-          "prefillTps": 208.3,
-          "id": "a-code-short"
-        },
-        {
-          "text": "In a transformer-based mixture-of-experts (MoE) model, the relationship between decode throughput and weight-file size, versus prefill throughput and weight-file size, is governed by the arithmetic intensity of each phase and the sparsity pattern of expert activation. The key insight is that **decode is memory-bandwidth-bound** and its throughput is proportional to the total number of parameters that must be loaded per token, while **prefill is compute-bound** for sufficiently long sequences, and its throughput is limited by matrix-multiplication flops rather than memory traffic.\n\nWe analyze each phase in turn, assuming a standard MoE architecture with \\(E=256\\) experts, of which \\(k=8\\) are activated per token via a top-\\(k\\) gating mechanism. The total number of parameters in the model is dominated by the expert weights (feed-forward networks, typically two weight matrices per expert). Let the total weight-file size be \\(W\\) bytes (e.g., for a 1-trillion-parameter model in FP16, \\(W \\approx 2\\) TB). The dense equivalent model would have the same total parameters, but all experts would be active for every token.\n\n---\n\n### 1. Decode Phase (Autoregressive Generation)\n\nIn decode,",
-          "sha256": "ad567b7110e34f8adc9b9525ba7fdddca739022747d426a50cde1eb286fe2551",
-          "promptTokens": 64,
-          "completionTokens": 256,
-          "ttftSeconds": 0.3361,
-          "decodeTps": 15.9,
-          "prefillTps": 190.42,
-          "id": "b-prose-short"
-        },
-        {
-          "text": "```python\nimport csv\nfrom dataclasses import dataclass\nimport unittest\nfrom typing import List, Any\n\n@dataclass\nclass Column:\n    name: str\n    kind: type\n\ndef infer_column(values):\n    \"\"\"Infer the narrowest type that holds every value: int, float, bool, or str.\"\"\"\n    if not values:\n        return str\n    \n    # Check if all values are bool\n    all_bool = True\n    for v in values:\n        if v.lower() not in ('true', 'false', '1', '0', 'yes', 'no'):\n            all_bool = False\n            break\n    if all_bool:\n        return bool\n    \n    # Check if all values are int\n    all_int = True\n    for v in values:\n        try:\n            int(v)\n        except (ValueError, TypeError):\n            all_int = False\n            break\n    if all_int:\n        return int\n    \n    # Check if all values are float\n    all_float = True\n    for v in values:\n        try:\n            float(v)\n        except (ValueError, TypeError):\n            all_float = False\n            break\n    if all_float:\n        return float",
-          "sha256": "0685f61f5e17bac3617d1a64f8dbbbe235cb6a0461e0644b786f57a9cbcb82b8",
-          "promptTokens": 1643,
-          "completionTokens": 256,
-          "ttftSeconds": 0.9434,
-          "decodeTps": 16.77,
-          "prefillTps": 1741.54,
-          "id": "c-code-2k"
-        },
-        {
-          "text": "**Summary of Entries:**\n\n- The GB10 uses a unified memory architecture where weights, activations, and the KV cache share a single 128 GB memory pool.\n- This eliminates the need to shuttle data across a bus between separate GPU and CPU memory.\n- Any kernel that saves memory bandwidth benefits the entire system, not just the GPU.\n- The architecture fundamentally changes how model placement is reasoned about.\n- The same statement is repeated 105 times, emphasizing its importance.\n\n**Conclusion for a CUDA Kernel Author:**\n\nA CUDA kernel author should conclude that **optimizing for memory bandwidth efficiency is the single highest-leverage activity** on",
-          "sha256": "9204b35103311232a8bb76f368902efe65d8830e7db363e55a3c7010271a7714",
-          "promptTokens": 6547,
-          "completionTokens": 128,
-          "ttftSeconds": 2.3163,
-          "decodeTps": 16.92,
-          "prefillTps": 2826.48,
-          "id": "d-doc-8k"
-        }
-      ],
-      "decodeTps": 16.335,
-      "prefillTps": 974.92
-    },
-    {
-      "label": "baseline",
-      "patch": null,
-      "at": "2026-07-30T13:37:27+00:00",
-      "tempStartC": 55.0,
-      "tempEndC": 56.0,
-      "powerEndW": 6.05,
-      "prompts": [
-        {
-          "text": "```python\nimport csv\nfrom dataclasses import dataclass\nimport unittest\nfrom typing import List, Optional\n\n@dataclass\nclass Column:\n    name: str\n    kind: type\n\ndef infer_column(values):\n    \"\"\"Infer the narrowest type that holds every value: int, float, bool, or str.\"\"\"\n    if not values:\n        return str\n    \n    # First check if all values are bool\n    all_bool = True\n    for v in values:\n        if v.lower() not in ('true', 'false', '1', '0', 'yes', 'no'):\n            all_bool = False\n            break\n    \n    if all_bool:\n        return bool\n    \n    # Check if all values are int\n    all_int = True\n    for v in values:\n        try:\n            int(v)\n        except (ValueError, TypeError):\n            all_int = False\n            break\n    \n    if all_int:\n        return int\n    \n    # Check if all values are float\n    all_float = True\n    for v in values:\n        try:\n            float(v)\n        except (ValueError, TypeError):\n            all_float = False\n            break\n    \n    if all_float:\n        return",
-          "sha256": "a1a2ca6075f26faf4e6f5c311c9fc242104c53db56491f334b3dfcd1b78522bc",
-          "promptTokens": 87,
-          "completionTokens": 256,
-          "ttftSeconds": 0.4235,
-          "decodeTps": 15.383,
-          "prefillTps": 205.41,
-          "id": "a-code-short"
-        },
-        {
-          "text": "In a transformer-based mixture-of-experts (MoE) model, the relationship between decode throughput and weight-file size, versus prefill throughput and weight-file size, is governed by the arithmetic intensity of each phase and the sparsity pattern of expert activation. The key insight is that **decode is memory-bandwidth-bound** and its throughput is proportional to the total number of parameters that must be loaded per token, while **prefill is compute-bound** for sufficiently long sequences, and its throughput is limited by matrix-multiplication flops rather than memory traffic.\n\nWe analyze each phase in turn, assuming a standard MoE architecture with \\(E=256\\) experts, of which \\(k=8\\) are activated per token via a top-\\(k\\) gating mechanism. The total number of parameters in the model is dominated by the expert weights (feed-forward networks, typically two weight matrices per expert). Let the total weight-file size be \\(W\\) bytes (e.g., for a 1-trillion-parameter model in FP16, \\(W \\approx 2\\) TB). The dense equivalent model would have the same total parameters, but all experts would be active for every token.\n\n---\n\n### 1. Decode Phase (Autoregressive Generation)\n\nIn decode,",
-          "sha256": "ad567b7110e34f8adc9b9525ba7fdddca739022747d426a50cde1eb286fe2551",
-          "promptTokens": 64,
-          "completionTokens": 256,
-          "ttftSeconds": 0.3383,
-          "decodeTps": 15.975,
-          "prefillTps": 189.2,
-          "id": "b-prose-short"
-        },
-        {
-          "text": "```python\nimport csv\nfrom dataclasses import dataclass\nimport unittest\nfrom typing import List, Any\n\n@dataclass\nclass Column:\n    name: str\n    kind: type\n\ndef infer_column(values):\n    \"\"\"Infer the narrowest type that holds every value: int, float, bool, or str.\"\"\"\n    if not values:\n        return str\n    \n    # Check if all values are bool\n    all_bool = True\n    for v in values:\n        if v.lower() not in ('true', 'false', '1', '0', 'yes', 'no'):\n            all_bool = False\n            break\n    if all_bool:\n        return bool\n    \n    # Check if all values are int\n    all_int = True\n    for v in values:\n        try:\n            int(v)\n        except (ValueError, TypeError):\n            all_int = False\n            break\n    if all_int:\n        return int\n    \n    # Check if all values are float\n    all_float = True\n    for v in values:\n        try:\n            float(v)\n        except (ValueError, TypeError):\n            all_float = False\n            break\n    if all_float:\n        return float",
-          "sha256": "0685f61f5e17bac3617d1a64f8dbbbe235cb6a0461e0644b786f57a9cbcb82b8",
-          "promptTokens": 1643,
-          "completionTokens": 256,
-          "ttftSeconds": 0.928,
-          "decodeTps": 16.005,
-          "prefillTps": 1770.45,
-          "id": "c-code-2k"
-        },
-        {
-          "text": "**Summary in five bullet points:**\n\n- The GB10 uses a unified memory architecture where weights, activations, and the KV cache share a single 128 GB memory pool.\n- This eliminates the need to shuttle data across a bus between separate GPU and CPU memory.\n- Because all data resides in one pool, any bandwidth savings from a kernel benefit the entire system, not just the GPU.\n- The architecture fundamentally changes how model placement is reasoned about, since memory is no longer partitioned by device.\n- The repeated entries emphasize that this is a core, non-negotiable design principle of the GB10.\n\n**What a CUDA kernel author",
-          "sha256": "999998346aa829d7f16ecfb76ecdd23ebb6fdeaebc874e1a10cce38a2634c3dd",
-          "promptTokens": 6547,
-          "completionTokens": 128,
-          "ttftSeconds": 2.2851,
-          "decodeTps": 16.112,
-          "prefillTps": 2865.08,
-          "id": "d-doc-8k"
-        }
-      ],
-      "decodeTps": 15.989999999999998,
-      "prefillTps": 987.9300000000001
-    },
-    {
-      "label": "baseline",
-      "patch": null,
-      "at": "2026-07-30T13:42:30+00:00",
-      "tempStartC": 56.0,
+      "at": "2026-07-30T16:14:34+00:00",
+      "tempStartC": 60.0,
       "tempEndC": 59.0,
-      "powerEndW": 6.2,
+      "powerEndW": 6.23,
       "prompts": [
         {
-          "text": "```python\nimport csv\nfrom dataclasses import dataclass\nimport unittest\nfrom typing import List, Optional\n\n@dataclass\nclass Column:\n    name: str\n    kind: type\n\ndef infer_column(values):\n    \"\"\"Infer the narrowest type that holds every value: int, float, bool, or str.\"\"\"\n    if not values:\n        return str\n    \n    # First check if all values are bool\n    all_bool = True\n    for v in values:\n        if v.lower() not in ('true', 'false', '1', '0', 'yes', 'no'):\n            all_bool = False\n            break\n    \n    if all_bool:\n        return bool\n    \n    # Check if all values are int\n    all_int = True\n    for v in values:\n        try:\n            int(v)\n        except (ValueError, TypeError):\n            all_int = False\n            break\n    \n    if all_int:\n        return int\n    \n    # Check if all values are float\n    all_float = True\n    for v in values:\n        try:\n            float(v)\n        except (ValueError, TypeError):\n            all_float = False\n            break\n    \n    if all_float:\n        return",
-          "sha256": "a1a2ca6075f26faf4e6f5c311c9fc242104c53db56491f334b3dfcd1b78522bc",
+          "text": "```python\nimport csv\nfrom dataclasses import dataclass\nimport unittest\nfrom typing import List, Optional\n\n@dataclass\nclass Column:\n    name: str\n    kind: type\n\ndef infer_column(values):\n    \"\"\"Infer the narrowest type that holds every value: int, float, bool, or str.\"\"\"\n    if not values:\n        return str\n    \n    # Check for bool first (must be before int since bool is subclass of int)\n    all_bool = True\n    for v in values:\n        if v.lower() not in ('true', 'false', '1', '0', 'yes', 'no'):\n            all_bool = False\n            break\n    \n    if all_bool:\n        return bool\n    \n    # Check for int\n    all_int = True\n    for v in values:\n        try:\n            int(v)\n        except (ValueError, TypeError):\n            all_int = False\n            break\n    \n    if all_int:\n        return int\n    \n    # Check for float\n    all_float = True\n    for v in values:\n        try:\n            float(v)\n        except (ValueError, TypeError):\n            all_float = False\n            break\n    \n    if all_float:\n",
+          "sha256": "8507614e5b56c5a484ee9b0d09dd7e250a99025c472089271c3b0662bd2d5e0f",
           "promptTokens": 87,
           "completionTokens": 256,
-          "ttftSeconds": 0.414,
-          "decodeTps": 15.916,
-          "prefillTps": 210.12,
+          "ttftSeconds": 0.4786,
+          "decodeTps": 25.959,
+          "prefillTps": 181.76,
           "id": "a-code-short"
         },
         {
-          "text": "In a transformer-based mixture-of-experts (MoE) model, the relationship between decode throughput and weight-file size, versus prefill throughput and weight-file size, is governed by the arithmetic intensity of each phase and the sparsity pattern of expert activation. The key insight is that **decode is memory-bandwidth-bound** and its throughput is proportional to the total number of parameters that must be loaded per token, while **prefill is compute-bound** for sufficiently long sequences, and its throughput is limited by matrix-multiplication flops rather than memory traffic.\n\nWe analyze each phase in turn, assuming a standard MoE architecture with \\(E=256\\) experts, of which \\(k=8\\) are activated per token via a top-\\(k\\) gating mechanism. The total number of parameters in the model is dominated by the expert weights (feed-forward networks, typically two weight matrices per expert). Let the total weight-file size be \\(W\\) bytes (e.g., for a 1-trillion-parameter model in FP16, \\(W \\approx 2\\) TB). The dense equivalent model would have the same total parameters, but all experts would be active for every token.\n\n---\n\n### 1. Decode Phase (Autoregressive Generation)\n\nIn decode,",
-          "sha256": "ad567b7110e34f8adc9b9525ba7fdddca739022747d426a50cde1eb286fe2551",
+          "text": "Here is a careful technical explanation of the observed throughput behavior.\n\n### 1. The Core Distinction: Arithmetic Intensity\n\nThe performance of a transformer-based model on modern hardware (GPUs/TPUs) is governed by the **arithmetic intensity** of each operation, defined as:\n\n\\[\n\\text{Arithmetic Intensity} = \\frac{\\text{Total FLOPs}}{\\text{Total Bytes Moved}}\n\\]\n\nA phase is **compute-bound** if its arithmetic intensity exceeds the hardware's peak FLOP/s to bandwidth ratio (the \"roofline\" ridge). It is **bandwidth-bound** if it falls below this ridge. The decode and prefill phases of a Mixture-of-Experts (MoE) model have fundamentally different arithmetic intensities, which explains their divergent scaling with model size.\n\n### 2. The Decode Phase (Autoregressive Token Generation)\n\nIn the decode phase, the model generates one token at a time. The key constraint is the **batch size**: typically 1 (or a very small number of parallel sequences).\n\n#### 2.1. Weight Loading Dominates\nFor a single token, the forward pass must load the entire set of active expert weights from High Bandwidth Memory (HBM) into the compute units (e",
+          "sha256": "8f1d3c2061a8164d4d217c1cf69df67b7b04192291b6c22c9b6495bc7094ccf3",
           "promptTokens": 64,
           "completionTokens": 256,
-          "ttftSeconds": 0.3308,
-          "decodeTps": 15.924,
-          "prefillTps": 193.45,
+          "ttftSeconds": 0.3688,
+          "decodeTps": 25.985,
+          "prefillTps": 173.56,
           "id": "b-prose-short"
         },
         {
-          "text": "```python\nimport csv\nfrom dataclasses import dataclass\nimport unittest\nfrom typing import List, Any\n\n@dataclass\nclass Column:\n    name: str\n    kind: type\n\ndef infer_column(values):\n    \"\"\"Infer the narrowest type that holds every value: int, float, bool, or str.\"\"\"\n    if not values:\n        return str\n    \n    # Check if all values are bool\n    all_bool = True\n    for v in values:\n        if v.lower() not in ('true', 'false', '1', '0', 'yes', 'no'):\n            all_bool = False\n            break\n    if all_bool:\n        return bool\n    \n    # Check if all values are int\n    all_int = True\n    for v in values:\n        try:\n            int(v)\n        except (ValueError, TypeError):\n            all_int = False\n            break\n    if all_int:\n        return int\n    \n    # Check if all values are float\n    all_float = True\n    for v in values:\n        try:\n            float(v)\n        except (ValueError, TypeError):\n            all_float = False\n            break\n    if all_float:\n        return float",
-          "sha256": "0685f61f5e17bac3617d1a64f8dbbbe235cb6a0461e0644b786f57a9cbcb82b8",
+          "text": "```python\nimport csv\nfrom dataclasses import dataclass\nimport unittest\nfrom typing import List, Any\n\n@dataclass\nclass Column:\n    name: str\n    kind: type\n\ndef infer_column(values):\n    \"\"\"Infer the narrowest type that holds every value: int, float, bool, or str.\"\"\"\n    if not values:\n        return str\n    \n    # Check if all values are bool\n    all_bool = True\n    for v in values:\n        if v.lower() not in ('true', 'false', '1', '0', 'yes', 'no'):\n            all_bool = False\n            break\n    if all_bool:\n        return bool\n    \n    # Check if all values can be int\n    all_int = True\n    for v in values:\n        try:\n            int(v)\n        except (ValueError, TypeError):\n            all_int = False\n            break\n    if all_int:\n        return int\n    \n    # Check if all values can be float\n    all_float = True\n    for v in values:\n        try:\n            float(v)\n        except (ValueError, TypeError):\n            all_float = False\n            break\n    if all_float:\n       ",
+          "sha256": "662fd99077f8b258e245e97d048571c037179b7c9420789b448858582726ab0c",
           "promptTokens": 1643,
           "completionTokens": 256,
-          "ttftSeconds": 0.9384,
-          "decodeTps": 15.907,
-          "prefillTps": 1750.91,
+          "ttftSeconds": 0.9831,
+          "decodeTps": 25.945,
+          "prefillTps": 1671.3,
           "id": "c-code-2k"
         },
         {
-          "text": "Here is the summary and conclusion based on the entries provided.\n\n**Summary**\n\n- The GB10 uses a unified memory architecture, combining weights, activations, and the KV cache into a single 128 GB pool.\n- This eliminates the need to shuttle data across a bus between separate memory pools (e.g., CPU vs. GPU memory).\n- Because all components share the same pool, any bandwidth savings from a kernel benefit the entire system, not just the GPU.\n- The architecture fundamentally changes how model placement is reasoned about, as there is no longer a distinction between \"GPU memory\" and \"system memory\" for these workloads.\n- The",
-          "sha256": "6b553d2de6fce3b0e11b9d0e2262f6c0ad5da2baf0d9ce743bfbf7975a2434d1",
+          "text": "Here is the summary and conclusion based on the entries provided.\n\n**Summary**\n\n- The GB10 uses a unified memory architecture, combining weights, activations, and the KV cache into a single 128 GB pool.\n- This eliminates the need to shuttle data across a bus between separate memory pools (e.g., CPU vs. GPU memory).\n- Any kernel that saves bandwidth benefits the entire system, not just the GPU.\n- The architecture fundamentally changes how model placement is reasoned about.\n- The core advantage is that bandwidth savings have a system-wide impact.\n\n**Conclusion for a CUDA Kernel Author**\n\nA CUDA kernel author should conclude that **",
+          "sha256": "8199c594f035730dee82c7021bad7046baef6785902bf90a37785baab346143a",
           "promptTokens": 6547,
           "completionTokens": 128,
-          "ttftSeconds": 2.3006,
-          "decodeTps": 15.918,
-          "prefillTps": 2845.74,
+          "ttftSeconds": 2.4154,
+          "decodeTps": 25.818,
+          "prefillTps": 2710.5,
           "id": "d-doc-8k"
         }
       ],
-      "decodeTps": 15.917,
-      "prefillTps": 980.5150000000001
+      "decodeTps": 25.951999999999998,
+      "prefillTps": 926.53
+    },
+    {
+      "label": "baseline",
+      "patch": null,
+      "at": "2026-07-30T16:19:36+00:00",
+      "tempStartC": 59.0,
+      "tempEndC": 58.0,
+      "powerEndW": 6.3,
+      "prompts": [
+        {
+          "text": "```python\nimport csv\nfrom dataclasses import dataclass\nimport unittest\nfrom typing import List, Optional\n\n@dataclass\nclass Column:\n    name: str\n    kind: type\n\ndef infer_column(values):\n    \"\"\"Infer the narrowest type that holds every value: int, float, bool, or str.\"\"\"\n    if not values:\n        return str\n    \n    # Check for bool first (must be before int since bool is subclass of int)\n    all_bool = True\n    for v in values:\n        if v.lower() not in ('true', 'false', '1', '0', 'yes', 'no'):\n            all_bool = False\n            break\n    \n    if all_bool:\n        return bool\n    \n    # Check for int\n    all_int = True\n    for v in values:\n        try:\n            int(v)\n        except (ValueError, TypeError):\n            all_int = False\n            break\n    \n    if all_int:\n        return int\n    \n    # Check for float\n    all_float = True\n    for v in values:\n        try:\n            float(v)\n        except (ValueError, TypeError):\n            all_float = False\n            break\n    \n    if all_float:\n",
+          "sha256": "8507614e5b56c5a484ee9b0d09dd7e250a99025c472089271c3b0662bd2d5e0f",
+          "promptTokens": 87,
+          "completionTokens": 256,
+          "ttftSeconds": 0.4796,
+          "decodeTps": 25.884,
+          "prefillTps": 181.4,
+          "id": "a-code-short"
+        },
+        {
+          "text": "Here is a careful technical explanation of the observed throughput behavior.\n\n### 1. The Core Distinction: Arithmetic Intensity\n\nThe performance of a transformer-based model on modern hardware (GPUs/TPUs) is governed by the **arithmetic intensity** of each operation, defined as:\n\n\\[\n\\text{Arithmetic Intensity} = \\frac{\\text{Total FLOPs}}{\\text{Total Bytes Moved}}\n\\]\n\nA phase is **compute-bound** if its arithmetic intensity exceeds the hardware's peak FLOP/s to bandwidth ratio (the \"roofline\" ridge). It is **bandwidth-bound** if it falls below this ridge. The decode and prefill phases of a Mixture-of-Experts (MoE) model have fundamentally different arithmetic intensities, which explains their divergent scaling with model size.\n\n### 2. The Decode Phase (Autoregressive Token Generation)\n\nIn the decode phase, the model generates one token at a time. The key constraint is the **batch size**: typically 1 (or a very small number of parallel sequences).\n\n#### 2.1. Weight Loading Dominates\nFor a single token, the forward pass must load the entire set of active expert weights from High Bandwidth Memory (HBM) into the compute units (e",
+          "sha256": "8f1d3c2061a8164d4d217c1cf69df67b7b04192291b6c22c9b6495bc7094ccf3",
+          "promptTokens": 64,
+          "completionTokens": 256,
+          "ttftSeconds": 0.3688,
+          "decodeTps": 25.813,
+          "prefillTps": 173.52,
+          "id": "b-prose-short"
+        },
+        {
+          "text": "```python\nimport csv\nfrom dataclasses import dataclass\nimport unittest\nfrom typing import List, Any\n\n@dataclass\nclass Column:\n    name: str\n    kind: type\n\ndef infer_column(values):\n    \"\"\"Infer the narrowest type that holds every value: int, float, bool, or str.\"\"\"\n    if not values:\n        return str\n    \n    # Check if all values are bool\n    all_bool = True\n    for v in values:\n        if v.lower() not in ('true', 'false', '1', '0', 'yes', 'no'):\n            all_bool = False\n            break\n    if all_bool:\n        return bool\n    \n    # Check if all values can be int\n    all_int = True\n    for v in values:\n        try:\n            int(v)\n        except (ValueError, TypeError):\n            all_int = False\n            break\n    if all_int:\n        return int\n    \n    # Check if all values can be float\n    all_float = True\n    for v in values:\n        try:\n            float(v)\n        except (ValueError, TypeError):\n            all_float = False\n            break\n    if all_float:\n       ",
+          "sha256": "662fd99077f8b258e245e97d048571c037179b7c9420789b448858582726ab0c",
+          "promptTokens": 1643,
+          "completionTokens": 256,
+          "ttftSeconds": 0.9837,
+          "decodeTps": 25.712,
+          "prefillTps": 1670.16,
+          "id": "c-code-2k"
+        },
+        {
+          "text": "Here is the summary of the entries in exactly five bullet points, followed by the conclusion for a CUDA kernel author.\n\n**Summary**\n\n- The GB10 uses a unified memory architecture where weights, activations, and the KV cache share a single 128 GB memory pool.\n- This eliminates the need to shuttle data across a bus between separate CPU and GPU memory pools.\n- Any kernel that saves bandwidth benefits the entire system, not just the GPU.\n- The architecture fundamentally changes how model placement is reasoned about.\n- The key takeaway is that bandwidth savings have a system-wide impact, not a localized one.\n\n**Conclusion for a CUDA",
+          "sha256": "0a30bb1ffb87a86ad7ea128c3461756e8689679c7eb34df97d4195a36c6f684f",
+          "promptTokens": 6547,
+          "completionTokens": 128,
+          "ttftSeconds": 2.4467,
+          "decodeTps": 25.589,
+          "prefillTps": 2675.84,
+          "id": "d-doc-8k"
+        }
+      ],
+      "decodeTps": 25.7625,
+      "prefillTps": 925.7800000000001
+    },
+    {
+      "label": "baseline",
+      "patch": null,
+      "at": "2026-07-30T16:24:22+00:00",
+      "tempStartC": 58.0,
+      "tempEndC": 61.0,
+      "powerEndW": 6.39,
+      "prompts": [
+        {
+          "text": "```python\nimport csv\nfrom dataclasses import dataclass\nimport unittest\nfrom typing import List, Optional\n\n@dataclass\nclass Column:\n    name: str\n    kind: type\n\ndef infer_column(values):\n    \"\"\"Infer the narrowest type that holds every value: int, float, bool, or str.\"\"\"\n    if not values:\n        return str\n    \n    # Check for bool first (must be before int since bool is subclass of int)\n    all_bool = True\n    for v in values:\n        if v.lower() not in ('true', 'false', '1', '0', 'yes', 'no'):\n            all_bool = False\n            break\n    \n    if all_bool:\n        return bool\n    \n    # Check for int\n    all_int = True\n    for v in values:\n        try:\n            int(v)\n        except (ValueError, TypeError):\n            all_int = False\n            break\n    \n    if all_int:\n        return int\n    \n    # Check for float\n    all_float = True\n    for v in values:\n        try:\n            float(v)\n        except (ValueError, TypeError):\n            all_float = False\n            break\n    \n    if all_float:\n",
+          "sha256": "8507614e5b56c5a484ee9b0d09dd7e250a99025c472089271c3b0662bd2d5e0f",
+          "promptTokens": 87,
+          "completionTokens": 256,
+          "ttftSeconds": 0.4829,
+          "decodeTps": 25.829,
+          "prefillTps": 180.16,
+          "id": "a-code-short"
+        },
+        {
+          "text": "Here is a careful technical explanation of the observed throughput behavior.\n\n### 1. The Core Distinction: Arithmetic Intensity\n\nThe performance of a transformer-based model on modern hardware (GPUs/TPUs) is governed by the **arithmetic intensity** of each operation, defined as:\n\n\\[\n\\text{Arithmetic Intensity} = \\frac{\\text{Total FLOPs}}{\\text{Total Bytes Moved}}\n\\]\n\nA phase is **compute-bound** if its arithmetic intensity exceeds the hardware's peak FLOP/s to bandwidth ratio (the \"roofline\" ridge). It is **bandwidth-bound** if it falls below this ridge. The decode and prefill phases of a Mixture-of-Experts (MoE) model have fundamentally different arithmetic intensities, which explains their divergent scaling with model size.\n\n### 2. The Decode Phase (Autoregressive Token Generation)\n\nIn the decode phase, the model generates one token at a time. The key constraint is the **batch size**: typically 1 (or a very small number of parallel sequences).\n\n#### 2.1. Weight Loading Dominates\nFor a single token, the forward pass must load the entire set of active expert weights from High Bandwidth Memory (HBM) into the compute units (e",
+          "sha256": "8f1d3c2061a8164d4d217c1cf69df67b7b04192291b6c22c9b6495bc7094ccf3",
+          "promptTokens": 64,
+          "completionTokens": 256,
+          "ttftSeconds": 0.3648,
+          "decodeTps": 25.789,
+          "prefillTps": 175.42,
+          "id": "b-prose-short"
+        },
+        {
+          "text": "```python\nimport csv\nfrom dataclasses import dataclass\nimport unittest\nfrom typing import List, Any\n\n@dataclass\nclass Column:\n    name: str\n    kind: type\n\ndef infer_column(values):\n    \"\"\"Infer the narrowest type that holds every value: int, float, bool, or str.\"\"\"\n    if not values:\n        return str\n    \n    # Check if all values are bool\n    all_bool = True\n    for v in values:\n        if v.lower() not in ('true', 'false', '1', '0', 'yes', 'no'):\n            all_bool = False\n            break\n    if all_bool:\n        return bool\n    \n    # Check if all values can be int\n    all_int = True\n    for v in values:\n        try:\n            int(v)\n        except (ValueError, TypeError):\n            all_int = False\n            break\n    if all_int:\n        return int\n    \n    # Check if all values can be float\n    all_float = True\n    for v in values:\n        try:\n            float(v)\n        except (ValueError, TypeError):\n            all_float = False\n            break\n    if all_float:\n       ",
+          "sha256": "662fd99077f8b258e245e97d048571c037179b7c9420789b448858582726ab0c",
+          "promptTokens": 1643,
+          "completionTokens": 256,
+          "ttftSeconds": 0.9694,
+          "decodeTps": 25.763,
+          "prefillTps": 1694.92,
+          "id": "c-code-2k"
+        },
+        {
+          "text": "Here is the summary of the entries in exactly five bullet points, followed by the conclusion for a CUDA kernel author.\n\n**Summary**\n\n- The GB10 uses a unified memory architecture, combining weights, activations, and the KV cache into a single 128 GB pool.\n- This eliminates the need to shuttle data across a bus between separate memory pools (e.g., CPU and GPU).\n- Any kernel that saves bandwidth benefits the entire system, not just the GPU.\n- The architecture fundamentally changes how model placement is reasoned about.\n- The key takeaway is that bandwidth savings have a system-wide impact, not a localized one.\n\n**Conclusion",
+          "sha256": "e73b9a6107c1ffcf31580e7db14ea3d483fd336a6da1132edf43e1ce7d2d317c",
+          "promptTokens": 6547,
+          "completionTokens": 128,
+          "ttftSeconds": 2.4047,
+          "decodeTps": 25.573,
+          "prefillTps": 2722.61,
+          "id": "d-doc-8k"
+        }
+      ],
+      "decodeTps": 25.776000000000003,
+      "prefillTps": 937.5400000000001
     }
   ],
   "note": "Absolutes are for the record. Scoring uses paired ratios measured in one session \u2014 a baseline from another day is not comparable."

@@ -8,16 +8,16 @@
   "vendorPin": "0.21.1rc1.dev339+g1967a5627bc3 (aidendle94/sparkrun-vllm-ds4-gb10:production-ready)",
   "repoUrl": "https://github.com/Sapid-Labs/vllm-spark-arena",
   "origin": {
-    "recordedAt": "2026-07-30T13:42:30+00:00",
+    "recordedAt": "2026-07-30T16:24:22+00:00",
     "node": "spark-05cc",
     "buildInfo": "0.21.1rc1.dev339+g1967a5627bc3 (aidendle94/sparkrun-vllm-ds4-gb10:production-ready)",
-    "decodeTps": 15.989999999999998,
-    "prefillTps": 980.5150000000001,
+    "decodeTps": 25.776000000000003,
+    "prefillTps": 926.53,
     "note": "The frontier is measured against THIS. Every cumulative number on the chart is a product of paired ratios back to here."
   },
   "current": {
-    "decodeTps": 15.989999999999998,
-    "prefillTps": 980.5150000000001,
+    "decodeTps": 25.776000000000003,
+    "prefillTps": 926.53,
     "cumulativeDecodeSpeedup": 1.0,
     "cumulativePrefillSpeedup": 1.0,
     "cumulativeScore": 1.0,
