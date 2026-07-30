@@ -6,7 +6,7 @@
   "engine": "vllm",
   "hardware": "NVIDIA DGX Spark",
   "vendorPin": "0.21.1rc1.dev339+g1967a5627bc3 (aidendle94/sparkrun-vllm-ds4-gb10:production-ready)",
-  "repoUrl": null,
+  "repoUrl": "https://github.com/Sapid-Labs/vllm-spark-arena",
   "origin": {
     "recordedAt": "2026-07-30T13:42:30+00:00",
     "node": "spark-05cc",
