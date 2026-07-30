@@ -440,6 +440,28 @@ class Server:
         self.base = f"http://127.0.0.1:{self.port}"
         self.proc = None
 
+    def _sandbox_guard(self):
+        """No candidate code runs without VERIFIED network isolation.
+
+        This lives on the server, not in run_arm, because run_arm is one of four
+        callers -- probe, warm and heldout also start a patched server, and the
+        first version of this check guarded only bench. A guard that one path
+        bypasses is not a guard.
+
+        Baseline arms are exempt: that code is ours.
+        """
+        if not self.patch or not sandbox_applies(self.target):
+            return
+        ok, detail = sandbox_status(None)
+        if not ok:
+            die("refusing to start a server with a CANDIDATE patch and no network isolation.\n"
+                f"    {detail}\n"
+                "    Gate 3 stops a patch that stored answers. It cannot stop one that fetches\n"
+                "    help while the arm runs. Run `python3 harness/arena.py sandbox --check`\n"
+                "    for the one-time setup, or set sandbox.required=false in benchmark.json\n"
+                "    and accept that submissions are trusted.")
+        Out.ok(f"sandbox: {detail}")
+
     def _env(self):
         env = dict(os.environ)
         env["PATH"] = f"{VENV / 'bin'}:/usr/local/cuda/bin:" + env.get("PATH", "")
@@ -479,6 +501,7 @@ class Server:
         return argv + ["--host", "127.0.0.1", "--port", str(self.port)]
 
     def __enter__(self):
+        self._sandbox_guard()
         argv = self._argv()
         Out.info("serve: " + " ".join(argv)
                  + (f"   [patch {self.patch}]" if self.patch else "   [baseline]"))
@@ -715,6 +738,7 @@ class ImageServer(Server):
     # ------------------------------------------------------------- lifecycle
 
     def __enter__(self):
+        self._sandbox_guard()
         self.cluster = None            # no Ray on this substrate
         self._rm_containers()
         time.sleep(4)
@@ -854,6 +878,92 @@ def generate_heldout(target, seed_hex, count):
 
 
 # ------------------------------------------------------------------- commands
+
+# -------------------------------------------------------------------- sandbox
+
+_EGRESS_PROBE = (
+    "import socket,sys\n"
+    "try:\n"
+    "    socket.create_connection(('1.1.1.1', 443), timeout=4).close()\n"
+    "    print('EGRESS_OPEN')\n"
+    "except Exception:\n"
+    "    print('EGRESS_BLOCKED')\n"
+)
+
+
+def sandbox_cfg():
+    return CONTRACT.get("sandbox") or {}
+
+
+def sandbox_applies(target):
+    """Does this target's substrate get network isolation?
+
+    The clustered substrate cannot: NCCL and torch.distributed need the
+    interconnect. That exemption is in the contract, not decided here.
+    """
+    cfg = sandbox_cfg()
+    if not cfg.get("required"):
+        return False
+    kind = substrate_cfg(target)["kind"]
+    return kind in (cfg.get("appliesTo") or [])
+
+
+def sandbox_status(host=None):
+    """Actively try to reach the internet as the sandbox user.
+
+    An attempt, not an inspection. A firewall rule that exists and does not work
+    is exactly the failure this must catch, and reading the ruleset would miss
+    it. Returns (ok, detail).
+    """
+    cfg = sandbox_cfg()
+    user = cfg.get("user")
+    if not user:
+        return False, "contract declares no sandbox.user"
+    exists = sh(f"id -u {user} >/dev/null 2>&1 && echo yes || echo no", host=host)
+    if exists.strip() != "yes":
+        return False, f"user '{user}' does not exist on this node"
+    probe = _EGRESS_PROBE.replace("\n", "; ").replace("; try:; ", "\ntry:\n    ")
+    # Write the probe to a file rather than fight three levels of quoting.
+    remote = "/tmp/arena_egress_probe.py"
+    Path("/tmp/arena_egress_probe.py").write_text(_EGRESS_PROBE)
+    if host is not None:
+        subprocess.run(["scp", "-q", "/tmp/arena_egress_probe.py", f"{host}:{remote}"],
+                       capture_output=True, timeout=60)
+    can_sudo = sh(f"sudo -n -u {user} true >/dev/null 2>&1 && echo yes || echo no", host=host)
+    if can_sudo.strip() != "yes":
+        return False, (f"cannot run as '{user}' without a password. Add a sudoers entry "
+                       f"(see sandbox.setup in benchmark.json).")
+    out = sh(f"sudo -n -u {user} python3 {remote} 2>&1 | tail -1", host=host, timeout=90)
+    if "EGRESS_BLOCKED" in out:
+        return True, f"egress from '{user}' is blocked"
+    if "EGRESS_OPEN" in out:
+        return False, (f"egress from '{user}' is OPEN. The REJECT rule is missing or not "
+                       f"matching; a patch could fetch help mid-run.")
+    return False, f"probe gave no verdict: {out[:120]}"
+
+
+def cmd_sandbox(args):
+    cfg = sandbox_cfg()
+    Out.step(f"sandbox: mechanism '{cfg.get('mechanism')}', user '{cfg.get('user')}'")
+    ok, detail = sandbox_status(None)
+    (Out.ok if ok else Out.fail)(detail)
+    if not ok:
+        print()
+        Out.info("one-time root setup:")
+        for line in cfg.get("setup", []):
+            print(f"      {line}")
+        print()
+        Out.info(cfg.get("setupNote", ""))
+    # Read access matters as much as the rule: the sandbox user must be able to
+    # read the venv and the model, or every arm dies for a reason that looks
+    # like the patch's fault.
+    if ok:
+        user = cfg["user"]
+        for label, path in (("venv", str(VENV)), ("arena", str(ROOT))):
+            r = sh(f"sudo -n -u {user} test -r {path} && echo yes || echo no")
+            (Out.ok if r.strip() == "yes" else Out.warn)(f"{label} readable by {user}: {r.strip()}")
+    return 0 if ok else 1
+
 
 def _dispatch_fingerprint(log_paths, only=None):
     """The set of kernel-selection lines the engine printed.
@@ -1639,6 +1749,10 @@ def main():
                    help="keep boot 0 (only correct if VLLM_CACHE_ROOT is already warm)")
     b.set_defaults(discard_first=True)
     b.set_defaults(fn=cmd_baseline)
+
+    sb = sub.add_parser("sandbox", help="check that the isolation for candidate arms actually works")
+    sb.add_argument("--check", action="store_true", default=True)
+    sb.set_defaults(fn=cmd_sandbox)
 
     pr = sub.add_parser("probe", help="ONE boot: did this patch change anything the engine does?")
     pr.add_argument("--target", required=True)
