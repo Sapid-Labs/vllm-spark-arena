@@ -71,6 +71,30 @@ def now_iso():
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def require_local_node(record, path, kind, force=False):
+    """Refuse a record measured somewhere else.
+
+    Every number this harness publishes is a paired ratio, and a paired ratio is
+    only meaningful on the node that produced it. `promote` copies the ratio
+    straight out of the record it is handed, so handing it the contributor's
+    record publishes the contributor's measurement under the referee's name. It
+    would pass every other check in `promote`, and the site would then label it
+    verified. Cheap to check, so check it.
+    """
+    node = record.get("node")
+    here = os.uname().nodename
+    if not node or node == here:
+        return
+    if force:
+        Out.warn(f"--force: promoting a {kind} measured on '{node}', not '{here}'")
+        return
+    die(f"{kind} {path} was measured on '{node}', but this node is '{here}'.\n"
+        f"    Gate 5 is the referee's, and so is the measurement behind it: re-run the\n"
+        f"    submission here and promote YOUR record, not the contributor's.\n"
+        f"      python3 harness/arena.py bench --target <target> --patch <patch>\n"
+        f"    Pass --force only if you mean to publish a number you did not measure.")
+
+
 # ------------------------------------------------------------------- contract
 
 def load_target(slug, allow_blocked=False):
@@ -269,18 +293,49 @@ class Cluster:
 
     def teardown(self):
         for h in self.hosts:
-            # [r]aylet character class: an unguarded pattern matches the ssh
-            # command line running it and kills the session mid-teardown.
-            sh(f"{self.ray} stop --force >/dev/null 2>&1; "
+            # vLLM RENAMES its children to VLLM::EngineCore / VLLM::Worker_TP0,
+            # so a 'vllm serve' pattern misses every one of them. Measured
+            # 2026-07-29: survivors held 11 GiB on the head and 71 GiB on the
+            # worker across runs, and a stale worker still attached to the same
+            # shm_broadcast segment consumes blocks the NEW run is waiting for --
+            # which is indistinguishable from the message-queue stall.
+            #
+            # Every pattern is character-class guarded. An unguarded one matches
+            # the ssh command line carrying it and kills the session mid-teardown;
+            # guarding one pattern does not protect the others beside it.
+            sh(f"pkill -9 -f '[V]LLM::' 2>/dev/null; "
+               f"pkill -9 -f '[v]llm serve' 2>/dev/null; "
+               f"{self.ray} stop --force >/dev/null 2>&1; "
                f"pkill -9 -f '[r]aylet --' 2>/dev/null; "
                f"pkill -9 -f '[g]cs_server' 2>/dev/null; true", host=h, timeout=180)
-        time.sleep(5)
+        time.sleep(6)
         for h in self.hosts:
+            label = h or "head"
             # pgrep -c prints 0 AND exits non-zero, so `|| echo 0` gives "0\n0".
-            n = sh("pgrep -cf '[r]aylet --'", host=h) or "0"
-            if n.split("\n")[0].strip() not in ("0", ""):
-                die(f"[{h or 'head'}] {n} raylet(s) survived teardown. `ray start` would "
+            n = (sh("pgrep -cf '[r]aylet --'", host=h) or "0").split("\n")[0].strip()
+            if n not in ("0", ""):
+                die(f"[{label}] {n} raylet(s) survived teardown. `ray start` would "
                     f"ATTACH to the survivor and inherit its environment.")
+            v = (sh("pgrep -cf '[V]LLM::'", host=h) or "0").split("\n")[0].strip()
+            if v not in ("0", ""):
+                die(f"[{label}] {v} VLLM:: process(es) survived teardown. They hold GPU "
+                    f"memory and shm_broadcast segments, and the next run would measure "
+                    f"a cluster it does not control.")
+        # The GPUs must actually be free before an arm starts. A survivor that
+        # exits late still owns memory, and the next boot fails on
+        # "Free memory ... less than desired GPU memory utilization".
+        for attempt in range(4):
+            busy = {}
+            for h in self.hosts:
+                c = (sh("nvidia-smi --query-compute-apps=pid --format=csv,noheader "
+                        "| grep -c . || true", host=h) or "0").split("\n")[0].strip()
+                if c not in ("0", ""):
+                    busy[h or "head"] = c
+            if not busy:
+                return
+            Out.info(f"waiting for GPUs to clear: {busy}")
+            time.sleep(8)
+        die(f"GPUs still busy after teardown: {busy}")
 
     def preflight(self):
         for h, ip in zip(self.hosts, self._ips()):
@@ -917,6 +972,13 @@ def cmd_promote(args):
     if not record.get("promotable") and not args.force:
         failed = [k for k, v in record["gates"].items() if not v]
         die(f"record did not pass its own gates ({', '.join(failed) or 'score <= 1.0'})")
+    # The ratio published to the frontier is the one in THIS record, so the
+    # record has to be the referee's own re-run. Promoting the contributor's
+    # record is the easy mistake: it passes every other check here, and the
+    # number on the chart then belongs to a node nobody else measured -- while
+    # the site presents it as verified. Gate 5 is the referee's; so is the
+    # measurement it rests on.
+    require_local_node(record, args.record, "bench record", args.force)
     # Gate 3 must be BACKED BY A RECORD, not asserted. A boolean flag is a
     # promise; a record names the seed, the node and the changed files, so the
     # verification can be reproduced by anyone later. "Verified" is granted, not
@@ -928,6 +990,7 @@ def cmd_promote(args):
             die(f"{args.held_out_record} is not a held-out verification record")
         if held_out["target"] != target["_slug"]:
             die(f"held-out record is for target '{held_out['target']}'")
+        require_local_node(held_out, args.held_out_record, "held-out record", args.force)
         if not held_out.get("passed"):
             die(f"held-out verification FAILED on {len(held_out.get('mismatches', []))} "
                 f"prompt(s) — this candidate changes output on inputs it was not "

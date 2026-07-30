@@ -31,10 +31,13 @@
       "opened": "2026-07-29",
       "what": "Requests stall indefinitely at random under TP2. All three processes are READERS on vLLM's shm_broadcast queue and nobody writes: both ranks wait in worker_busy_loop for a command, the driver waits in get_response for a reply. The 100% CPU at idle GPU wattage is shm_broadcast's spin-poll.",
       "whyItBlocks": "A baseline needs 4 boots to agree. At this failure rate it will not finish, and a partial baseline is worse than none: it would define goldens from whichever prompts happened to survive.",
-      "nextStep": "Chase it on the 21 GB reproducer, not here. VLLM_MQ_MAX_CHUNK_BYTES_MB first, then shm_broadcast's local-vs-remote reader accounting.",
+      "nextStep": "Decide the substrate. Either pin the recipe's 0.21.1-dev build for clustered targets -- the contract already treats a different wheel as a different substrate whose scores are not comparable, and single-node targets keep 0.26.0 -- or report 0.26.0's message queue upstream.",
       "scope": "FLEET-WIDE, not this model. Reproduced on Qwen3.6-27B-NVFP4 (21 GB, none of this target's kernels): warmup 1 s, request 1 fine, request 2 at ~800 prompt tokens hung the full 300 s. So this blocks every dual-Spark target, and it is tracked in benchmark.json under measurement.multiNode.fleetBlocker.",
       "ruledOut": "the interconnect (raw TCP measured 1561 MB/s during a hang), RoCE GID churn (fixed by pinning NCCL_IB_HCA; stall persists with zero warnings), NCCL itself (no rank is in a collective), async scheduling (disabled; persists), kernel JIT (zero events during a 37-minute hang), prompt shape (a 64-token prompt hung after decoding fine earlier), and memory (kv usage 0.5%).",
-      "reproduce": "harness/tp2_isolate.sh ~/models/hf/Qwen3.6-27B-NVFP4 24"
+      "reproduce": "harness/tp2_size_bisect.sh (ascending) and its descending variant. 2-minute boots on a 21 GB model, no DeepSeek code involved.",
+      "rootCause": "The arena pinned vLLM 0.26.0, which had never run multi-node on this fleet. The WORKING dual-Spark recipe (42.0/76.0 tok/s, published) runs vLLM 0.21.1rc1.dev339+g1967a5627bc3 inside aidendle94/sparkrun-vllm-ds4-gb10, with the mp headless executor. So 'we have run models on both Sparks' is true and refers to a different engine build.",
+      "notTheExecutor": "Both executors fail identically -- mp and ray share multiproc_executor and shm_broadcast. Switching to mp changed nothing.",
+      "cumulativeNotSize": "Ascending prompt sizes said 'fails at ~340 tokens'; descending said 'fails at ~1200' after 2230 and 1780 succeeded. Same ordinal position (3rd-4th request after boot), any size. --max-num-batched-tokens 4096 changed nothing, so not prefill chunking. Fits a ring buffer whose blocks are never reclaimed."
     },
     {
       "id": "oom-guard-headroom",

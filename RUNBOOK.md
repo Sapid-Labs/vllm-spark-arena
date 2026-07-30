@@ -51,6 +51,11 @@ python3 harness/arena.py leaderboard --target qwen3-6-27b-nvfp4
 Promotion refuses a gate-3 record that verified a *different patch*, one that
 failed, one whose speedup did not generalize, or none at all.
 
+It also refuses a bench record measured on **another node**. When you referee a
+submission, re-run `bench` here and promote your own record: the ratio that goes
+on the frontier has to be one this node measured, since the site presents it as
+verified. `--force` waives the check and says so in the output.
+
 ## Kernel submissions
 
 A submission may also own engine **source** files, via `patches/<name>/kernels/`.
