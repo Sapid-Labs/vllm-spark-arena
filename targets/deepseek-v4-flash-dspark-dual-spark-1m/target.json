@@ -3,8 +3,8 @@
   "name": "DeepSeek V4 Flash DSpark \u2014 dual Spark, 1M context",
   "recipe": "deepseek-v4-flash-dspark-dual-spark-1m",
   "recipeUrl": "https://howtospark.com/recipes/deepseek-v4-flash-dspark-dual-spark-1m",
-  "status": "blocked",
-  "statusNote": "Serves, decodes at 26.6 tok/s, and greedy output is provably identical across boots. It cannot hold a 4-boot baseline because TP2 on this fleet stalls at random -- a vLLM message-queue bug that reproduces on a 21 GB model with none of this target's code, so it is not this target's fault and not this target's fix.",
+  "status": "open",
+  "statusNote": "Unblocked 2026-07-30, not yet baselined. Both hard blockers are answered: greedy output is identical across boots, and the multi-node stall is gone on the clustered substrate. What remains is harness work -- arena.py can launch a venv wheel but not yet a Docker image.",
   "blockers": [
     {
       "id": "multi-node-determinism",
@@ -39,13 +39,23 @@
       "notTheExecutor": "Both executors fail identically -- mp and ray share multiproc_executor and shm_broadcast. Switching to mp changed nothing.",
       "cumulativeNotSize": "Ascending prompt sizes said 'fails at ~340 tokens'; descending said 'fails at ~1200' after 2230 and 1780 succeeded. Same ordinal position (3rd-4th request after boot), any size. --max-num-batched-tokens 4096 changed nothing, so not prefill chunking. Fits a ring buffer whose blocks are never reclaimed.",
       "option1Tested": "2026-07-30. The recipe's image (vLLM 0.21.1rc1.dev339) DOES fix the stall: eight serial requests of mixed length all returned in 2-4 s, where the 0.26.0 wheel fails on request 3-4 after every boot. But the image is NOT deterministic -- one prompt, three serial requests, three different hashes -- and --max-num-seqs 1 will not boot on it at all: DeepGEMM CUDA_ERROR_ILLEGAL_ADDRESS with VLLM_USE_B12X_MOE=1, and 'NCCL error: unhandled cuda error' with it off. The two builds fail in opposite ways: 0.26.0 is deterministic and stalls; 0.21.1-dev is stable and is not deterministic. Neither satisfies both halves of the gate yet.",
-      "notConcurrency": "The non-determinism is not batching. Requests were strictly serial, so every forward pass had batch 1 whatever the --max-num-seqs ceiling was."
+      "notConcurrency": "The non-determinism is not batching. Requests were strictly serial, so every forward pass had batch 1 whatever the --max-num-seqs ceiling was.",
+      "resolved": "2026-07-30",
+      "howResolved": "Pinned the clustered substrate. The stall is a 0.26.0 defect and does not occur on the image: 8 serial requests, 115-2225 prompt tokens, all returned in 2-4 s. Determinism came separately, from VLLM_USE_B12X_MOE=0: 6/6 byte-identical over two boots sharing one VLLM_CACHE_ROOT."
     },
     {
       "id": "oom-guard-headroom",
       "severity": "soft",
       "what": "oom-guard.sh trips at MemAvailable < 8192 MiB and killed a run that missed by 321 MiB, silently. The 6 GiB KV pin clears it, but the margin is thin and an arena arm must not die mid-measurement.",
       "nextStep": "Either raise the guard for arena runs or keep the KV pin at 6 GiB and verify headroom before each arm."
+    },
+    {
+      "id": "harness-docker-substrate",
+      "severity": "hard",
+      "opened": "2026-07-30",
+      "what": "arena.py launches a venv wheel. It cannot launch a Docker image, so it cannot run this target even though the configuration is proven by hand.",
+      "scope": "Harness code only. No unknown physics remains on this target.",
+      "nextStep": "Teach Server/Cluster to launch the clustered substrate: docker run per node with the contract's dockerFlags, the target's env, NCCL_IB_GID_INDEX derived per node, and the image entrypoint. harness/tp2_image_launch.sh already does exactly this by hand and is the reference."
     }
   ],
   "why": "Worth scaffolding despite being blocked: at 1,048,576 tokens of context across two nodes with FP4 experts and FP8 dense, it exercises paths nothing else in the corpus does \u2014 and it is the recipe most likely to reward kernel work, because almost nothing on that path was written for sm_121.",
@@ -100,8 +110,6 @@
   "promptSettingsNote": "d-doc-8k is ~7.7k tokens and --max-model-len is 8192, so its output budget has to be small enough to fit. A request that overruns the context aborts the arm.",
   "startupTimeout": 1800,
   "cacheRoot": "~/.cache/vllm-dsv4",
-  "patchRequired": "flashinfer-dsv4-pbs256",
-  "patchNote": "This target does not run at all without the overlay: the stock DSv4 decode kernel is instantiated only at PAGE_BLOCK_SIZE 64, and the model needs 256. The overlay is therefore part of the BASELINE here, not a candidate -- both arms carry it.",
   "cluster": {
     "nodes": 2,
     "nic": "enp1s0f1np1",
@@ -128,10 +136,15 @@
   "serveArgs": [
     "--served-model-name",
     "dsv4",
+    "--trust-remote-code",
+    "--tokenizer-mode",
+    "deepseek_v4",
     "--distributed-executor-backend",
-    "ray",
+    "mp",
     "--tensor-parallel-size",
     "2",
+    "--pipeline-parallel-size",
+    "1",
     "--block-size",
     "256",
     "--kv-cache-dtype",
@@ -139,31 +152,37 @@
     "--max-model-len",
     "8192",
     "--gpu-memory-utilization",
-    "0.70",
-    "--kv-cache-memory-bytes",
-    "6442450944",
+    "0.83",
     "--max-num-seqs",
-    "1",
+    "6",
     "--max-num-batched-tokens",
     "8192",
-    "--no-async-scheduling",
-    "--trust-remote-code"
+    "--enforce-eager"
   ],
   "asyncSchedulingNote": "MANDATORY, and it is the fix for the TP2 deadlock. Async scheduling makes max_concurrent_batches 2, which puts the engine on step_with_batch_queue -- it submits batch N+1 while collecting N. Caught mid-hang, all three processes were READERS on the shm_broadcast queue and none was in a collective: the driver waited in get_response for a reply, and both ranks waited in worker_busy_loop for a command. Nobody was writing. The 100% CPU with GPUs at idle wattage is shm_broadcast's spin-poll, which is what made this look like an NCCL problem for two days. The flag is --no-async-scheduling; note that `--async-scheduling False` silently sets it TRUE and leaves 'False' as a stray positional argument.",
-  "serveArgsNote": "--max-num-seqs 1 is mandatory: batching breaks token identity on this part (n=2 -> 2 distinct outputs), and the whole cheap gate rests on greedy determinism. --max-model-len is 8192, NOT the recipe's 1M -- the KV pin that clears the oom-guard does not leave room for it, and a target that cannot finish an arm cannot rank anything. A 1M-context variant is its own target.",
+  "serveArgsNote": "Proven config, 2026-07-30. --max-num-seqs is 6, NOT 1: 1 does not boot on this build, and it is not needed because the harness sends one request at a time, so every forward pass has batch 1. Do NOT add --kv-cache-memory-bytes: it skips memory profiling and the first FP8 GEMM dies with CUDA_ERROR_ILLEGAL_ADDRESS. --enforce-eager is kept because cross-boot identity was measured WITH it; dropping it may be a speed win but needs its own cross-boot test. --max-model-len is 8192, not the recipe's 1M -- a 1M variant is its own target.",
   "env": {
+    "VLLM_USE_B12X_MOE": "0",
+    "VLLM_ALLOW_LONG_MAX_MODEL_LEN": "1",
+    "VLLM_SPARSE_INDEXER_MAX_LOGITS_MB": "256",
+    "TORCH_CUDA_ARCH_LIST": "12.1a",
+    "FLASHINFER_CUDA_ARCH_LIST": "12.1a",
+    "NCCL_NET": "IB",
+    "NCCL_IB_DISABLE": "0",
     "NCCL_IB_HCA": "rocep1s0f1",
-    "NCCL_IB_HCA_NOTE": "Pin NCCL to the RoCE device on the direct 200G link (rocep1s0f1 -> enp1s0f1np1, 192.168.100.x). Unpinned, NCCL also builds a virtual device on roceP2p1s0f1, a DIFFERENT NIC, and then logs `NCCL WARN NET/IB : roceP2p1s0f1:1 GID table changed` continuously. A RoCE GID table holds one entry per IP address on the port, so it churns every time an address appears or disappears -- and this fleet runs Tailscale plus rotating IPv6 privacy addresses. Churn invalidates NCCL's queue-pair state mid-run, which is why the deadlock was intermittent and why it looked like everything except what it was.",
-    "RAY_local_fs_capacity_threshold": "1",
-    "RAY_memory_monitor_refresh_ms": "0",
-    "VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS": "900",
-    "NCCL_DEBUG": "INFO",
-    "NCCL_DEBUG_SUBSYS": "INIT,NET"
+    "NCCL_CROSS_NIC": "0",
+    "NCCL_CUMEM_ENABLE": "0",
+    "NCCL_IGNORE_CPU_AFFINITY": "1",
+    "NCCL_DEBUG": "WARN"
   },
   "weights": {
     "hfRepo": "deepseek-ai/DeepSeek-V4-Flash",
     "public": true,
     "sizeBytes": 238370000000,
     "note": "222 GB on disk. Public and ungated, so it satisfies policy.publicWeights -- but it is the largest entry cost in either arena, and it must be present on BOTH nodes."
-  }
+  },
+  "substrate": "clustered",
+  "substrateNote": "This target runs on the CLUSTERED substrate (see substrate.clustered in benchmark.json): the recipe's image, vLLM 0.21.1rc1.dev339, not the 0.26.0 wheel. Its scores are not comparable with single-node targets, which is already the rule for a different wheel.",
+  "overlayNote": "The flashinfer page-block-size-256 overlay is NOT needed here. It existed to make the 0.26.0 wheel serve this model at block size 256; the image already ships a build that does.",
+  "envNote": "VLLM_USE_B12X_MOE=0 is MANDATORY and is the single reason this target is rankable. At 1, one prompt returns three different answers in one boot. NCCL_IB_GID_INDEX is deliberately absent -- it must be derived per node at launch (harness/gid_index.sh); it is 3 on one node and 5 on the other."
 }

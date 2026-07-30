@@ -17,7 +17,41 @@
       "note": "Pinned exactly. A different wheel is a different substrate and its scores are not comparable."
     },
     "mechanism": "A submission is a directory under patches/<name>/ containing sitecustomize.py. It is put on PYTHONPATH for the candidate arm only, so it applies at interpreter startup and therefore reaches vLLM's spawned engine and worker processes -- which a post-import monkeypatch would not. Precedent: bench/patches/laguna-int4 on howtospark forces the Triton MoE path over Marlin in four lines.",
-    "outOfScope": "CUDA kernels in csrc/. Reaching them needs a from-source vLLM build for sm_121, which does not exist yet on this hardware and is tracked as its own milestone -- it is also what would unlock recovering the documented 13%."
+    "outOfScope": "CUDA kernels in csrc/. Reaching them needs a from-source vLLM build for sm_121, which does not exist yet on this hardware and is tracked as its own milestone -- it is also what would unlock recovering the documented 13%.",
+    "clustered": {
+      "kind": "image",
+      "why": "The pinned 0.26.0 wheel stalls on the 3rd-4th request of every multi-node boot -- a vLLM shm_broadcast deadlock, reproduced on two models and with both executors. The recipe's own image does not stall and IS cross-boot deterministic once the B12X MoE kernel is off. Clustered targets therefore pin the image; single-node targets keep the wheel.",
+      "image": "aidendle94/sparkrun-vllm-ds4-gb10:production-ready",
+      "vllmVersion": "0.21.1rc1.dev339+g1967a5627bc3",
+      "note": "A different substrate, so scores are NOT comparable with the 0.26.0 wheel. That is already the rule for a different wheel; an image is the same situation.",
+      "requiredEnv": {
+        "VLLM_USE_B12X_MOE": "0",
+        "VLLM_USE_B12X_MOE_why": "MANDATORY. With it at 1 the same prompt returns three different answers in one boot. With it at 0 every run agrees and agreement survives a restart. This single variable was the whole non-determinism.",
+        "NCCL_IB_HCA": "rocep1s0f1",
+        "NCCL_IB_GID_INDEX": "DERIVED PER NODE -- see harness/gid_index.sh. It is 3 on one node and 5 on the other; a shared value points at an IPv6 GID on one of them and ibv_modify_qp fails INIT->RTR.",
+        "NCCL_CROSS_NIC": "0",
+        "NCCL_CUMEM_ENABLE": "0",
+        "TORCH_CUDA_ARCH_LIST": "12.1a",
+        "VLLM_CACHE_ROOT": "a host mount shared across boots"
+      },
+      "dockerFlags": [
+        "--network host",
+        "--ipc host",
+        "--shm-size 64gb",
+        "--device /dev/infiniband",
+        "--ulimit memlock=-1"
+      ],
+      "forbidden": {
+        "--kv-cache-memory-bytes": "Skips memory profiling on this build, and the first FP8 GEMM then dies with CUDA_ERROR_ILLEGAL_ADDRESS. Use --gpu-memory-utilization instead.",
+        "--max-num-seqs 1": "Does not boot on this build. It is also not needed -- see measurement.serialRequests."
+      },
+      "evidence": {
+        "on": "2026-07-30",
+        "stability": "8 serial requests, prompt lengths 115-2225 tokens, all returned in 2-4 s. The 0.26.0 wheel fails on request 3-4 after every boot.",
+        "determinism": "One prompt, 3 serial requests, 2 separate boots sharing one VLLM_CACHE_ROOT: 6/6 byte-identical (01ba594f606e7c1d).",
+        "launcher": "harness/tp2_image_launch.sh"
+      }
+    }
   },
   "editableSurface": {
     "rule": "patches/<name>/**. Nothing else may differ between the arms: same wheel, same model file, same serve arguments, same environment apart from PYTHONPATH.",
@@ -71,7 +105,7 @@
       "why": "vLLM is only cross-boot deterministic under a pinned config, and gates 2 and 3 compare a baseline server against a candidate server -- two processes. Without the pins the gate fires on boot noise instead of on the patch. This is the one structural difference from the llama.cpp arena, where an ordinary serve command is already cross-boot identical.",
       "measured": "2026-07-28, Qwen3.6-27B-NVFP4 on vLLM 0.26.0. A single-short-prompt probe was identical across three boots with cudagraphs on AND with --enforce-eager, so capture is not the cause and the arena does not pay eager execution. But a wider FOUR-boot run over four prompts corrected that picture: the first boot against a cold VLLM_CACHE_ROOT differs on every prompt, and even among warm boots identity is PER-PROMPT \u2014 three of four were rock stable (including a 6,863-token one) while a 1,715-token prompt flipped between two hashes. Not a length effect; a numerical knife-edge on one input, same family as batch size flipping the argmax at n=2.",
       "pins": [
-        "--max-num-seqs 1  (prime suspect for the earlier cross-boot failure: it sets the profiling batch shape, and batch shape already flips the argmax on this part at n=2)",
+        "--max-num-seqs: pin it, but the VALUE is substrate-specific. On the wheel it is 1. On the clustered image 1 does not boot, so it is 6 -- and that is safe, because what breaks token identity is CONCURRENCY, and the harness never sends more than one request at a time. See measurement.serialRequests. Measured cross-boot identical at 6, serial.",
         "--kv-cache-memory-bytes  (so the KV pool is not sized from profiled free memory, which changes block count and therefore attention tiling)",
         "--max-model-len",
         "--gpu-memory-utilization",
@@ -136,9 +170,12 @@
           "Prompt shape. A 64-token prompt that decoded at 26.5 tok/s hung on a later boot; the stall point moves between runs.",
           "Memory. kv_cache_usage 0.5%, oom-guard never tripped."
         ],
-        "nextStep": "Chase it on the 21 GB reproducer. Suspects in order: VLLM_MQ_MAX_CHUNK_BYTES_MB (the stall correlates loosely with prompt size, and that knob sets the remote chunking), then the local-vs-remote reader accounting in shm_broadcast (a writer waits for ALL readers to set a read flag, and a miscounted reader would hang exactly like this), then vLLM 0.26.0 upstream issues for the same signature."
+        "nextStep": "Chase it on the 21 GB reproducer. Suspects in order: VLLM_MQ_MAX_CHUNK_BYTES_MB (the stall correlates loosely with prompt size, and that knob sets the remote chunking), then the local-vs-remote reader accounting in shm_broadcast (a writer waits for ALL readers to set a read flag, and a miscounted reader would hang exactly like this), then vLLM 0.26.0 upstream issues for the same signature.",
+        "resolved": "2026-07-30",
+        "howResolved": "Clustered targets pin the image substrate instead of the 0.26.0 wheel. The stall is a 0.26.0 defect; it is still worth reporting upstream, but it no longer blocks the arena."
       }
-    }
+    },
+    "serialRequests": "ONE request in flight is the requirement. --max-num-seqs 1 was belt-and-braces and it does not boot on the clustered substrate. It is not needed: the harness sends one request at a time, so every forward pass has batch 1 whatever the ceiling says. Measured 2026-07-30 at --max-num-seqs 6, serial: byte-identical across two boots. What breaks token identity is CONCURRENCY (n=2 -> 2 distinct outputs), and the harness never creates any."
   },
   "policy": {
     "optimizationVsRecipe": "Optimizations preserve output and get the cheap gate. Changes that alter output (precision, quantization, sampling, speculation) are a new RECIPE on howtospark.com, not an arena submission, and need eval evidence.",
