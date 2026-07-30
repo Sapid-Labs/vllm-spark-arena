@@ -35,11 +35,13 @@
         "VLLM_CACHE_ROOT": "a host mount shared across boots"
       },
       "dockerFlags": [
+        "--gpus all",
         "--network host",
         "--ipc host",
         "--shm-size 64gb",
         "--device /dev/infiniband",
-        "--ulimit memlock=-1"
+        "--ulimit memlock=-1",
+        "--ulimit stack=67108864"
       ],
       "forbidden": {
         "--kv-cache-memory-bytes": "Skips memory profiling on this build, and the first FP8 GEMM then dies with CUDA_ERROR_ILLEGAL_ADDRESS. Use --gpu-memory-utilization instead.",
@@ -50,7 +52,22 @@
         "stability": "8 serial requests, prompt lengths 115-2225 tokens, all returned in 2-4 s. The 0.26.0 wheel fails on request 3-4 after every boot.",
         "determinism": "One prompt, 3 serial requests, 2 separate boots sharing one VLLM_CACHE_ROOT: 6/6 byte-identical (01ba594f606e7c1d).",
         "launcher": "harness/tp2_image_launch.sh"
-      }
+      },
+      "entrypoint": "/usr/local/bin/dsv4-vllm-entrypoint",
+      "entrypointNote": "A generic wrapper: it sets PATH and the cache directories, then runs `vllm \"$@\"`. Despite the name it is not model-specific.",
+      "modelMount": {
+        "host": "~/models",
+        "container": "/models"
+      },
+      "requiredEnvValues": {
+        "VLLM_USE_B12X_MOE": "0",
+        "NCCL_CROSS_NIC": "0",
+        "NCCL_CUMEM_ENABLE": "0",
+        "TORCH_CUDA_ARCH_LIST": "12.1a",
+        "FLASHINFER_CUDA_ARCH_LIST": "12.1a"
+      },
+      "requiredEnvValuesNote": "Applied to every arm by the harness, before the target's own env. A target cannot opt out of these -- VLLM_USE_B12X_MOE=0 is the reason this substrate is deterministic at all.",
+      "dockerFlagsNote": "--gpus all is not optional and is easy to omit: without it the container starts, and vLLM fails with 'Failed to infer device type', which names nothing useful. --ipc host and --shm-size 64gb matter because vLLM's message queue lives in shared memory."
     }
   },
   "editableSurface": {

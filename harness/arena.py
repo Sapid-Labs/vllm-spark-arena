@@ -400,6 +400,38 @@ class Cluster:
 
 # --------------------------------------------------------------------- server
 
+def substrate_cfg(target):
+    """The substrate this target runs on. Default is the wheel."""
+    name = target.get("substrate", "wheel")
+    if name == "wheel":
+        return {"kind": "wheel", **CONTRACT["substrate"]["wheel"]}
+    cfg = CONTRACT["substrate"].get(name)
+    if not cfg:
+        avail = [k for k, v in CONTRACT["substrate"].items() if isinstance(v, dict)]
+        die(f"target declares substrate '{name}', which the contract does not define. "
+            f"Defined: {', '.join(avail)}")
+    return {"name": name, **cfg}
+
+
+def substrate_version(target):
+    """What to record as the pinned engine build.
+
+    Read from the contract for an image, not by starting a container: a version
+    probe that costs a 20-second container start would run on every arm.
+    """
+    cfg = substrate_cfg(target)
+    if cfg["kind"] == "wheel":
+        return wheel_version()
+    v = cfg.get("vllmVersion")
+    if not v:
+        die(f"substrate '{cfg.get('name')}' declares no vllmVersion. Scores are only "
+            f"comparable within one build, so the build has to be recorded.")
+    return f"{v} ({cfg['image']})"
+
+
+_boot_seq = [0]
+
+
 class Server:
     def __init__(self, target, patch, log_path):
         self.target, self.patch, self.log_path = target, patch, log_path
@@ -548,6 +580,200 @@ class Server:
                 "prefillTps": round(pt / ttft, 2) if pt and ttft > 0 else None}
 
 
+class ImageServer(Server):
+    """A clustered target served from a Docker image, one container per node.
+
+    Not Ray. vLLM's headless `mp` backend is used: rank 0 hosts the
+    torch.distributed store and the API server, every other rank runs
+    `--headless` and connects to it. Rank 0 MUST start first or the worker
+    spends its whole connect timeout and dies.
+
+    Everything here was established by hand first, in
+    harness/tp2_image_launch.sh. The traps it encodes:
+
+      * The repo is mounted at its OWN path inside the container, so the patch
+        chain and ARENA_PATCH_CHAIN work unchanged. Mounting it somewhere else
+        would need every path rewritten.
+      * NCCL_IB_GID_INDEX is derived on each node, never shared. It reads the
+        host's GID table, so it runs outside the container.
+      * The master port is bumped every boot. A previous arm's socket in
+        TIME_WAIT makes rank 0 fail with "server socket has failed to listen".
+      * `docker run -d` without `--rm`, so a crashed container's log survives
+        long enough to say why.
+    """
+
+    def __init__(self, target, patch, log_path):
+        super().__init__(target, patch, log_path)
+        self.cfg = substrate_cfg(target)
+        if self.cfg["kind"] != "image":
+            die(f"ImageServer used for substrate kind '{self.cfg['kind']}'")
+        c = target.get("cluster")
+        if not c:
+            die(f"target '{target['_slug']}' uses an image substrate but declares no cluster")
+        self.cluster_cfg = c
+        self.head_ip = c["head"]["ip"]
+        self.workers = c.get("workers", [])
+        self.hosts = [None] + [w["host"] for w in self.workers]
+        self.name = f"arena-{target['_slug'][:28]}"
+        _boot_seq[0] += 1
+        self.master_port = int(c.get("masterPort", 25500)) + _boot_seq[0]
+        mm = self.cfg.get("modelMount") or {"host": "~/models", "container": "/models"}
+        self.mount_host = os.path.expanduser(mm["host"])
+        self.mount_ctr = mm["container"]
+
+    # ---------------------------------------------------------------- helpers
+
+    def _container_model(self):
+        host = os.path.expanduser(self.target["model"])
+        if not host.startswith(self.mount_host):
+            die(f"model {host} is not under the mounted directory {self.mount_host}. "
+                f"Either move it or set substrate.modelMount.")
+        return self.mount_ctr + host[len(self.mount_host):]
+
+    def _gid_index(self, host, ip):
+        script = ROOT / "harness" / "gid_index.sh"
+        dev = self.cluster_cfg.get("ibDevice", "rocep1s0f1")
+        port = self.cluster_cfg.get("ibPort", 1)
+        out = sh(f"bash {script} {dev} {port} {ip}", host=host, timeout=60)
+        idx = (out.split("\n")[-1] if out else "").strip()
+        if not idx.isdigit():
+            die(f"[{host or 'head'}] could not derive a RoCE v2 GID index for {ip} on "
+                f"{dev}:{port}. Without it NCCL picks one that may be an IPv6 entry, and "
+                f"ibv_modify_qp fails INIT->RTR with EINVAL.")
+        return idx
+
+    def _docker_flags(self, gid, host_ip):
+        f = list(self.cfg.get("dockerFlags", []))
+        env = {**(self.cfg.get("requiredEnvValues") or {}),
+               **{k: str(v) for k, v in (self.target.get("env") or {}).items()},
+               "NCCL_IB_GID_INDEX": gid,
+               "VLLM_HOST_IP": host_ip}
+        # Derived from the cluster's NIC, not left to the target to remember.
+        # Without GLOO_SOCKET_IFNAME, Gloo picks an interface by itself and dies
+        # with "Unable to find address for: <some other NIC>" -- and the NIC it
+        # names is not the one anything is wrong with.
+        nic = self.cluster_cfg.get("nic")
+        if nic:
+            env.setdefault("NCCL_SOCKET_IFNAME", nic)
+            env.setdefault("GLOO_SOCKET_IFNAME", nic)
+        # A cache shared across boots. vLLM is only cross-boot deterministic with
+        # one, and inside a container it is otherwise recreated every start.
+        cache = os.path.expanduser(self.target.get("cacheRoot", "~/.cache/arena-image-vllm"))
+        env["VLLM_CACHE_ROOT"] = "/cache/vllm"
+        mounts = [f"-v {self.mount_host}:{self.mount_ctr}:ro",
+                  f"-v {cache}:/cache/vllm",
+                  f"-v {ROOT}:{ROOT}:ro"]
+        hf = os.path.expanduser("~/.cache/huggingface")
+        mounts.append(f"-v {hf}:/cache/huggingface")
+        env.setdefault("HF_HOME", "/cache/huggingface")
+        # The patch chain, exactly as on the wheel. ROOT is mounted at its own
+        # path, so these values need no translation.
+        chain = []
+        for nm in [self.target.get("patchRequired"), self.patch]:
+            if not nm:
+                continue
+            d = ROOT / "patches" / nm
+            if not (d / "sitecustomize.py").exists():
+                die(f"patch '{nm}' has no sitecustomize.py at {d}")
+            chain.append(str(d))
+        if chain:
+            env["ARENA_PATCH_CHAIN"] = os.pathsep.join(chain)
+            env["PYTHONPATH"] = str(ROOT / "harness" / "patchchain")
+        ev = " ".join(f"-e {k}={v}" for k, v in env.items())
+        return f"-d --name {self.name} {' '.join(f)} {' '.join(mounts)} {ev}"
+
+    def _serve_args(self, rank, headless):
+        a = ["serve", self._container_model()]
+        forbidden = self.cfg.get("forbidden") or {}
+        for x in self.target["serveArgs"]:
+            x = str(x)
+            if x in forbidden:
+                die(f"serveArgs contains '{x}', which this substrate forbids:\n"
+                    f"    {forbidden[x]}")
+            a.append(x)
+        a += ["--nnodes", str(self.cluster_cfg.get("nodes", 1 + len(self.workers))),
+              "--master-addr", self.head_ip, "--master-port", str(self.master_port),
+              "--node-rank", str(rank)]
+        if headless:
+            a.append("--headless")
+        else:
+            a += ["--host", "127.0.0.1", "--port", str(self.port)]
+        return " ".join(a)
+
+    def _rm_containers(self):
+        for h in self.hosts:
+            sh(f"docker rm -f {self.name} >/dev/null 2>&1; true", host=h, timeout=120)
+
+    def _capture_logs(self, suffix=""):
+        for h in self.hosts:
+            label = (h or "head").replace(".", "_")
+            out = sh(f"docker logs {self.name} 2>&1 | tail -400", host=h, timeout=180)
+            p = Path(str(self.log_path) + f".{label}{suffix}")
+            p.write_text(out or "(no container log)")
+
+    # ------------------------------------------------------------- lifecycle
+
+    def __enter__(self):
+        self.cluster = None            # no Ray on this substrate
+        self._rm_containers()
+        time.sleep(4)
+        for h, ip in zip(self.hosts, [self.head_ip] + [w["ip"] for w in self.workers]):
+            label = h or "head"
+            ml = sh("ulimit -l", host=h)
+            if ml != "unlimited":
+                die(f"[{label}] memlock is {ml}, not unlimited. Check you are not reading "
+                    f"this through a Tailscale SSH session -- tailscaled runs no PAM.")
+            if not sh(f"docker image inspect {self.cfg['image']} >/dev/null 2>&1 && echo ok",
+                      host=h, timeout=180):
+                die(f"[{label}] does not have image {self.cfg['image']}. Pull it on every node.")
+        entry = self.cfg.get("entrypoint", "/usr/local/bin/dsv4-vllm-entrypoint")
+        img = self.cfg["image"]
+
+        # Rank 0 first: it hosts the torch.distributed store the others wait on.
+        gid = self._gid_index(None, self.head_ip)
+        Out.info(f"head rank 0 (gid {gid}, master port {self.master_port})"
+                 + (f"   [patch {self.patch}]" if self.patch else "   [baseline]"))
+        sh(f"docker run {self._docker_flags(gid, self.head_ip)} --entrypoint {entry} "
+           f"{img} {self._serve_args(0, False)} >/dev/null", host=None, timeout=300, check=True)
+        time.sleep(int(self.cluster_cfg.get("headLeadSeconds", 15)))
+        for i, w in enumerate(self.workers, start=1):
+            gw = self._gid_index(w["host"], w["ip"])
+            Out.info(f"worker rank {i} on {w['ip']} (gid {gw}), headless")
+            sh(f"docker run {self._docker_flags(gw, w['ip'])} --entrypoint {entry} "
+               f"{img} {self._serve_args(i, True)} >/dev/null",
+               host=w["host"], timeout=300, check=True)
+
+        deadline = time.time() + self.target.get("startupTimeout", 1800)
+        while time.time() < deadline:
+            try:
+                with urllib.request.urlopen(f"{self.base}/health", timeout=3) as r:
+                    if r.status == 200:
+                        break
+            except Exception:
+                pass
+            alive = sh(f"docker ps --filter name={self.name} --format '{{{{.Names}}}}'", host=None)
+            if self.name not in (alive or ""):
+                self._capture_logs()
+                die(f"head container exited before it became healthy. Logs: "
+                    f"{self.log_path}.head")
+            time.sleep(5)
+        else:
+            self._capture_logs()
+            self.__exit__(None, None, None)
+            die("server never became healthy")
+        Out.ok(f"cluster healthy: {len(self.hosts)} node(s) on {self.cfg['image']}")
+        return self
+
+    def __exit__(self, *exc):
+        try:
+            self._capture_logs()
+        except Exception:
+            pass
+        self._rm_containers()
+        time.sleep(4)
+        return False
+
+
 def run_arm(target, patch, prompts, label, tag):
     Out.step(f"arm: {label}")
     # Gate every node, not just the head. One hot worker is enough to make a
@@ -557,7 +783,11 @@ def run_arm(target, patch, prompts, label, tag):
     temp0 = thermal_gate(hosts)
     logs = ROOT / "results" / "_logs"
     logs.mkdir(parents=True, exist_ok=True)
-    with Server(target, patch, logs / f"{target['_slug']}-{tag}.log") as srv:
+    # Which substrate serves this target. The wheel is a local process; an image
+    # is one container per node. Both present the same interface to the arm, so
+    # nothing below this line knows the difference.
+    cls = ImageServer if substrate_cfg(target)["kind"] == "image" else Server
+    with cls(target, patch, logs / f"{target['_slug']}-{tag}.log") as srv:
         for _ in range(CONTRACT["measurement"]["warmupRequests"]):
             srv.complete("warmup", 32)
         Out.info("discarded warmup (the first request after a boot always differs)")
@@ -652,7 +882,8 @@ def cmd_warm(args):
     Out.step(f"warm: {target['_slug']} — {len(prompts)} shape(s), timeout {args.timeout}s")
     logs = ROOT / "results" / "_logs"
     logs.mkdir(parents=True, exist_ok=True)
-    with Server(target, args.patch, logs / f"{target['_slug']}-warm.log") as srv:
+    cls = ImageServer if substrate_cfg(target)["kind"] == "image" else Server
+    with cls(target, args.patch, logs / f"{target['_slug']}-warm.log") as srv:
         for p in prompts:
             t0 = time.perf_counter()
             try:
@@ -676,7 +907,7 @@ def cmd_baseline(args):
     target = load_target(args.target)
     prompts = prompt_set(target)
     Out.step(f"baseline: {target['_slug']} ({len(prompts)} prompts, no patch)")
-    Out.info(f"vLLM {wheel_version()}")
+    Out.info(f"engine: {substrate_version(target)}")
     arms = [run_arm(target, None, prompts, "baseline", f"base-{i}") for i in range(args.repeats)]
 
     # The FIRST boot is discarded when the compile cache was cold. Measured
@@ -733,7 +964,7 @@ def cmd_baseline(args):
     goldens = stable
 
     (target["_dir"] / "goldens.json").write_text(json.dumps(
-        {"contractVersion": CONTRACT["contractVersion"], "wheel": wheel_version(),
+        {"contractVersion": CONTRACT["contractVersion"], "wheel": substrate_version(target),
          "recordedAt": now_iso(), "boots": len(arms), "prompts": goldens,
          "excluded": unstable,
          "excludedNote": "Prompts whose greedy output was not identical across every "
@@ -741,7 +972,7 @@ def cmd_baseline(args):
                          "excluded prompt is evidence about this model's numerical "
                          "stability, and the gate must not silently shrink."}, indent=2) + "\n")
     (target["_dir"] / "baseline.json").write_text(json.dumps(
-        {"contractVersion": CONTRACT["contractVersion"], "wheel": wheel_version(),
+        {"contractVersion": CONTRACT["contractVersion"], "wheel": substrate_version(target),
          "recordedAt": now_iso(), "node": os.uname().nodename,
          "modelFingerprint": model_fingerprint(target),
          "decodeTps": statistics.median([a["decodeTps"] for a in arms]),
@@ -773,7 +1004,7 @@ def cmd_bench(args):
     goldens = json.loads(gp.read_text())["prompts"] if gp.exists() else {}
 
     Out.step("gate 1: config identity")
-    wv = wheel_version()
+    wv = substrate_version(target)
     if wv != CONTRACT["substrate"]["wheel"]["version"]:
         die(f"installed vLLM is {wv}, pinned is {CONTRACT['substrate']['wheel']['version']} — "
             f"a different wheel is a different substrate and its scores are not comparable")
@@ -881,7 +1112,7 @@ def cmd_heldout(args):
     passed = identity and generalizes
     rec = {"contractVersion": CONTRACT["contractVersion"],
            "gate": "held-out-identity-and-speedup", "target": target["_slug"], "engine": "vllm",
-           "at": now_iso(), "node": os.uname().nodename, "wheel": wheel_version(),
+           "at": now_iso(), "node": os.uname().nodename, "wheel": substrate_version(target),
            "patch": args.patch, "referee": args.referee, "seed": seed,
            "promptCount": args.count,
            "heldOutDecodeSpeedup": round(dec, 5), "heldOutPrefillSpeedup": round(pre, 5),
@@ -931,7 +1162,10 @@ def load_leaderboard(target, create=False):
         "recipe": target.get("recipe"),
         "engine": "vllm",
         "hardware": CONTRACT["hardware"]["name"],
-        "vendorPin": f"vllm {CONTRACT['substrate']['wheel']['version']}",
+        # The TARGET's substrate, not always the wheel: a clustered target runs a
+        # different build, and a chart labelled with the wrong pin invites a
+        # comparison the contract forbids.
+        "vendorPin": substrate_version(target),
         "repoUrl": CONTRACT.get("repoUrl"),
         "origin": {
             "recordedAt": base["recordedAt"],

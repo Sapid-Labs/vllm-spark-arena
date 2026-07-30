@@ -55,7 +55,10 @@
       "opened": "2026-07-30",
       "what": "arena.py launches a venv wheel. It cannot launch a Docker image, so it cannot run this target even though the configuration is proven by hand.",
       "scope": "Harness code only. No unknown physics remains on this target.",
-      "nextStep": "Teach Server/Cluster to launch the clustered substrate: docker run per node with the contract's dockerFlags, the target's env, NCCL_IB_GID_INDEX derived per node, and the image entrypoint. harness/tp2_image_launch.sh already does exactly this by hand and is the reference."
+      "nextStep": "Teach Server/Cluster to launch the clustered substrate: docker run per node with the contract's dockerFlags, the target's env, NCCL_IB_GID_INDEX derived per node, and the image entrypoint. harness/tp2_image_launch.sh already does exactly this by hand and is the reference.",
+      "resolved": "2026-07-30",
+      "howResolved": "arena.py grew an ImageServer: one container per node, vLLM's headless mp backend, rank 0 started first because it hosts the torch.distributed store. It derives NCCL_IB_GID_INDEX per node, mounts the repo at its own path so the patch chain needs no translation, bumps the master port every boot to dodge TIME_WAIT, and rejects any serve flag the substrate forbids. Verified: `warm` brought both nodes up and warmed all four prompt shapes.",
+      "twoTrapsFound": "Writing it surfaced two omissions that the hand-written launcher had right. Without --gpus all the container starts and vLLM says 'Failed to infer device type', which names nothing useful. Without GLOO_SOCKET_IFNAME, Gloo picks an interface itself and dies with 'Unable to find address for: enP7s7' -- naming a NIC that has nothing wrong with it. Both are now derived by the harness, not left to a target."
     }
   ],
   "why": "Worth scaffolding despite being blocked: at 1,048,576 tokens of context across two nodes with FP4 experts and FP8 dense, it exercises paths nothing else in the corpus does \u2014 and it is the recipe most likely to reward kernel work, because almost nothing on that path was written for sm_121.",

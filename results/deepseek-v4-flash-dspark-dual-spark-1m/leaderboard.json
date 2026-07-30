@@ -1,0 +1,27 @@
+{
+  "contractVersion": 1,
+  "target": "deepseek-v4-flash-dspark-dual-spark-1m",
+  "targetName": "DeepSeek V4 Flash DSpark \u2014 dual Spark, 1M context",
+  "recipe": "deepseek-v4-flash-dspark-dual-spark-1m",
+  "engine": "vllm",
+  "hardware": "NVIDIA DGX Spark",
+  "vendorPin": "0.21.1rc1.dev339+g1967a5627bc3 (aidendle94/sparkrun-vllm-ds4-gb10:production-ready)",
+  "repoUrl": null,
+  "origin": {
+    "recordedAt": "2026-07-30T13:42:30+00:00",
+    "node": "spark-05cc",
+    "buildInfo": "0.21.1rc1.dev339+g1967a5627bc3 (aidendle94/sparkrun-vllm-ds4-gb10:production-ready)",
+    "decodeTps": 15.989999999999998,
+    "prefillTps": 980.5150000000001,
+    "note": "The frontier is measured against THIS. Every cumulative number on the chart is a product of paired ratios back to here."
+  },
+  "current": {
+    "decodeTps": 15.989999999999998,
+    "prefillTps": 980.5150000000001,
+    "cumulativeDecodeSpeedup": 1.0,
+    "cumulativePrefillSpeedup": 1.0,
+    "cumulativeScore": 1.0,
+    "promotionCount": 0
+  },
+  "promotions": []
+}
