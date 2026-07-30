@@ -88,3 +88,55 @@ npm run arena:pull && git diff data/arena/ && npm run arena:sync
   `NCCL_IB_DISABLE=1` until the memlock fix is applied as root.
 - **Guard every `pkill -f` pattern** (`[r]aylet`, not `raylet`) or you kill your
   own ssh session mid-teardown.
+
+
+---
+
+## The automated loop (added 2026-07-30)
+
+### One attempt, unattended
+
+```bash
+python3 harness/arena.py attempt \
+  --target qwen3-6-27b-nvfp4 --patch my-change \
+  --author <gh-handle> --model "Claude Opus 5" \
+  --note "one line on what it does" --referee joe
+```
+
+Runs `probe -> bench -> heldout -> promote` and stops at the first stage that
+says no. It writes a ledger entry to `results/_attempts/` for **every** outcome,
+including a pass — that file is the experiment log, and it is what stops an
+automated searcher retrying the same idea forever.
+
+Useful flags: `--no-promote` (run every gate, leave the frontier alone),
+`--bench-anyway` (measure a change the probe says will fail gate 2, to price it),
+`--skip-probe` (only when the effect is already known).
+
+### The probe, on its own
+
+```bash
+python3 harness/arena.py probe --target <t> --rebaseline      # once per pinned config
+python3 harness/arena.py probe --target <t> --patch <name>
+```
+
+One boot instead of four. It compares the **dispatch fingerprint** — the set of
+kernel-selection lines the engine printed — plus the output hashes.
+
+| verdict | meaning |
+|---|---|
+| `no-effect` | fingerprint and output both identical. Do not spend a bench. |
+| `will-fail-gate-2` | output differs. A bench would reject it on token identity. |
+| `promising` | dispatch changed, output held, throughput moved. Bench it. |
+| `inconclusive` | dispatch changed, output held, movement inside the one-boot noise floor. |
+
+**Re-run `--rebaseline` whenever the pinned serve config changes.** The fingerprint
+is a property of the config, not only of the engine.
+
+A probe is a filter, never a score. Only the paired bench measures.
+
+### What the probe cannot tell you
+
+It runs one arm, so it cannot separate a small win from drift — that is what
+`probeNoise` in the contract is for. And a changed fingerprint is not a
+guarantee of a win; it only means the engine made a different decision, which is
+the precondition for one.
