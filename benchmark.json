@@ -200,5 +200,29 @@
     "publicWeights": "EVERY target must point at weights a contributor can DOWNLOAD. No target may require someone to produce their own quantization. Same rule as the llama.cpp arena, and for the same reason: a download barrier in front of the arena costs more than any kernel win inside it.",
     "publicWeightsEnforcement": "A target declares weights.hfRepo and weights.public. The harness refuses a target with no weights block. Verify with the HF API that the repo is neither gated nor private."
   },
-  "repoUrl": "https://github.com/Sapid-Labs/vllm-spark-arena"
+  "repoUrl": "https://github.com/Sapid-Labs/vllm-spark-arena",
+  "probe": {
+    "why": "A bench is four boots and about twenty minutes. Most attempts do not fail on a gate -- they fail by doing nothing, and 'no effect' is visible after ONE boot. Both vLLM attempts on 2026-07-30 were no-ops and each burned a full bench to discover it.",
+    "signals": [
+      "Using .+ for NVFP4 GEMM",
+      "Using '.+' NvFp4 MoE backend",
+      "Using .+ MoE backend",
+      "does not have native support for FP4",
+      "Using .+ backend for .+attention",
+      "Detected ModelOpt .+ checkpoint",
+      "falling back to the slow and unoptimized",
+      "Using [A-Za-z0-9_]+ for .+ GEMM"
+    ],
+    "signalsNote": "Lines the engine prints about WHICH kernel it chose. Their set is the dispatch fingerprint. A patch whose fingerprint equals the baseline's changed no decision the engine makes, so it cannot be faster for a dispatch reason -- stop before spending a bench. Add a regex here when a new decision point matters; a signal that is never printed costs nothing.",
+    "verdicts": {
+      "no-effect": "Identical fingerprint AND identical output hash. Do not bench.",
+      "will-fail-gate-2": "Output hash differs from the baseline probe. Bench would reject on token identity.",
+      "promising": "Fingerprint changed, hash identical. Worth a bench.",
+      "inconclusive": "Fingerprint changed and hash identical but throughput moved less than probeNoise; one boot cannot separate that from drift."
+    },
+    "probeNoise": 0.03,
+    "probeNoiseNote": "One unpaired boot cannot resolve better than a few percent. The probe never reports a speedup as fact -- only the bench does, with paired arms.",
+    "appliedSignal": "\\[arena [a-z0-9-]+\\].*",
+    "appliedSignalNote": "A patch's OWN log line proves it loaded. It is deliberately NOT part of the dispatch fingerprint: counting it there made a provably inert patch read as 'inconclusive' instead of 'no-effect' the first time this filter was tested. Keeping them separate gives three distinct diagnoses -- not applied (a wiring error), applied but fingerprint unchanged (no effect), applied and fingerprint changed (worth a bench)."
+  }
 }

@@ -39,6 +39,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import signal
 import statistics
 import subprocess
@@ -854,6 +855,137 @@ def generate_heldout(target, seed_hex, count):
 
 # ------------------------------------------------------------------- commands
 
+def _dispatch_fingerprint(log_paths, only=None):
+    """The set of kernel-selection lines the engine printed.
+
+    Two runs with the same fingerprint made the same dispatch decisions. That is
+    not proof they are identical, but its CONVERSE is the useful half: a patch
+    whose fingerprint matches the baseline changed nothing the engine chooses,
+    so it cannot be faster for a dispatch reason.
+    """
+    pats = ([re.compile(only)] if only
+            else [re.compile(p) for p in CONTRACT.get("probe", {}).get("signals", [])])
+    seen = set()
+    for p in log_paths:
+        try:
+            text = Path(p).read_text(errors="ignore")
+        except Exception:
+            continue
+        text = re.sub(r"\x1b\[[0-9;]*m", "", text)
+        for line in text.splitlines():
+            for pat in pats:
+                m = pat.search(line)
+                if m:
+                    # Strip pids and timestamps so two boots compare equal.
+                    s = re.sub(r"pid=\d+", "pid=N", m.group(0))
+                    s = re.sub(r"\d{2}:\d{2}:\d{2}", "TS", s)
+                    seen.add(s.strip())
+    return sorted(seen)
+
+
+def cmd_probe(args):
+    """One boot. Did this patch change anything the engine actually does?
+
+    A bench is four boots and ~20 minutes. Most attempts do not fail a gate --
+    they fail by having no effect, and that is visible after one boot. This runs
+    the candidate once, compares its dispatch fingerprint and output hash against
+    a stored baseline probe, and says whether a bench is worth spending.
+
+    It never reports a speedup as a result. One unpaired boot cannot separate a
+    few percent from drift; only the paired bench can.
+    """
+    target = load_target(args.target, allow_blocked=args.allow_blocked)
+    prompts = prompt_set(target)[:args.prompts]
+    logs = ROOT / "results" / "_logs"
+    logs.mkdir(parents=True, exist_ok=True)
+    base_path = target["_dir"] / "probe-baseline.json"
+
+    def one(patch, tag):
+        cls = ImageServer if substrate_cfg(target)["kind"] == "image" else Server
+        lp = logs / f"{target['_slug']}-probe-{tag}.log"
+        rows = []
+        t0 = time.time()
+        with cls(target, patch, lp) as srv:
+            for _ in range(CONTRACT["measurement"]["warmupRequests"]):
+                srv.complete("warmup", 32)
+            for p in prompts:
+                r = srv.complete(p["text"], p["maxTokens"])
+                rows.append({"id": p["id"], "sha256": r["sha256"],
+                             "decodeTps": r["decodeTps"]})
+        # The image substrate writes container logs beside the harness log.
+        paths = [lp] + list(logs.glob(f"{lp.name}.*"))
+        fp = _dispatch_fingerprint(paths)
+        applied = _dispatch_fingerprint(paths, CONTRACT["probe"].get("appliedSignal"))
+        return {"patch": patch, "at": now_iso(), "bootSeconds": round(time.time() - t0, 1),
+                "prompts": rows, "fingerprint": fp, "applied": applied,
+                "decodeTps": statistics.median([r["decodeTps"] for r in rows if r["decodeTps"]])}
+
+    if args.rebaseline or not base_path.exists():
+        Out.step(f"probe: recording the BASELINE fingerprint for {target['_slug']}")
+        base = one(None, "base")
+        base_path.write_text(json.dumps(base, indent=2) + "\n")
+        Out.ok(f"baseline probe: {len(base['fingerprint'])} dispatch signal(s), "
+               f"{base['decodeTps']:.2f} tok/s")
+        for s in base["fingerprint"]:
+            Out.info(f"  {s[:150]}")
+        if not args.patch:
+            return
+    base = json.loads(base_path.read_text())
+
+    Out.step(f"probe: {target['_slug']} with patch '{args.patch}'")
+    cand = one(args.patch, "cand")
+
+    added = [s for s in cand["fingerprint"] if s not in base["fingerprint"]]
+    removed = [s for s in base["fingerprint"] if s not in cand["fingerprint"]]
+    bh = {r["id"]: r["sha256"] for r in base["prompts"]}
+    mismatched = [r["id"] for r in cand["prompts"] if bh.get(r["id"]) != r["sha256"]]
+
+    for s in added:
+        Out.info(f"  + {s[:150]}")
+    for s in removed:
+        Out.info(f"  - {s[:150]}")
+
+    if args.patch and not cand.get("applied"):
+        Out.warn("the patch never announced itself in any log. Either it prints nothing, or it "
+                 "was not on PYTHONPATH in the process that matters -- check that before "
+                 "believing any verdict below.")
+    noise = CONTRACT["probe"]["probeNoise"]
+    ratio = (cand["decodeTps"] / base["decodeTps"]) if base["decodeTps"] else 1.0
+    if mismatched:
+        verdict = "will-fail-gate-2"
+        Out.fail(f"output differs on {', '.join(mismatched)} — a bench would reject "
+                 f"this on token identity")
+    elif not added and not removed:
+        verdict = "no-effect"
+        Out.fail("dispatch fingerprint is IDENTICAL and output is identical: this patch "
+                 "changed no decision the engine makes. Do not spend a bench.")
+    elif ratio < 1 + noise:
+        verdict = "inconclusive"
+        Out.warn(f"dispatch changed and output held, but throughput moved x{ratio:.3f}, "
+                 f"inside the {noise:.0%} one-boot noise floor. A bench can settle it; "
+                 f"one boot cannot.")
+    else:
+        verdict = "promising"
+        Out.ok(f"dispatch changed, output identical, throughput x{ratio:.3f} — worth a bench")
+
+    rec = {"contractVersion": CONTRACT["contractVersion"], "kind": "probe",
+           "target": target["_slug"], "patch": args.patch, "at": now_iso(),
+           "node": os.uname().nodename, "verdict": verdict,
+           "patchAnnouncedItself": bool(cand.get("applied")),
+           "signalsAdded": added, "signalsRemoved": removed,
+           "mismatchedPrompts": mismatched,
+           "baselineDecodeTps": base["decodeTps"], "candidateDecodeTps": cand["decodeTps"],
+           "oneBootRatio": round(ratio, 4),
+           "note": "A probe is a filter, never a score. Only the paired bench measures.",
+           "baselineProbeAt": base["at"]}
+    out = ROOT / "results" / "_attempts"
+    out.mkdir(parents=True, exist_ok=True)
+    p = out / f"probe-{target['_slug']}-{args.patch}-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.json"
+    p.write_text(json.dumps(rec, indent=2) + "\n")
+    print(f"\n{Out.BOLD}verdict: {verdict}{Out.OFF}   {p.relative_to(ROOT)}")
+    return rec
+
+
 def cmd_warm(args):
     """Land every prompt shape's JIT in the on-disk cache before measuring.
 
@@ -1343,6 +1475,126 @@ def cmd_promote(args):
     Out.info(f"written to   : {path.relative_to(ROOT)}")
 
 
+def cmd_attempt(args):
+    """The whole chain, unattended, ending in a promotion or a recorded negative.
+
+    probe -> bench -> heldout -> promote
+
+    This is the unit an automated searcher repeats, so two properties matter more
+    than convenience. It STOPS EARLY: a probe that says no-effect costs one boot
+    instead of four, which is the difference between trying three things a day
+    and thirty. And it RECORDS THE NEGATIVE: three attempts so far produced three
+    findings that live only in prose, and a loop with no memory of them will
+    retry them forever.
+
+    A negative is written for every outcome, including a pass. The ledger is the
+    experiment log, not a failure list.
+    """
+    started = now_iso()
+    ledger = ROOT / "results" / "_attempts"
+    ledger.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    out = ledger / f"attempt-{args.target}-{args.patch}-{stamp}.json"
+
+    def finish(stage, outcome, detail, extra=None):
+        rec = {"contractVersion": CONTRACT["contractVersion"], "kind": "attempt",
+               "target": args.target, "patch": args.patch, "author": args.author,
+               "startedAt": started, "endedAt": now_iso(), "node": os.uname().nodename,
+               "stoppedAt": stage, "outcome": outcome, "detail": detail, **(extra or {})}
+        out.write_text(json.dumps(rec, indent=2) + "\n")
+        colour = Out.GRN if outcome == "promoted" else Out.YEL
+        print(f"\n{Out.BOLD}attempt {args.patch}: {colour}{outcome}{Out.OFF} "
+              f"(stopped at {stage})\n    {out.relative_to(ROOT)}")
+        return rec
+
+    # ---- 1. probe: one boot, is there any effect at all? -------------------
+    if not args.skip_probe:
+        pargs = argparse.Namespace(target=args.target, patch=args.patch, prompts=2,
+                                   rebaseline=False, allow_blocked=args.allow_blocked)
+        pr = cmd_probe(pargs)
+        if pr and pr["verdict"] == "no-effect":
+            return finish("probe", "no-effect",
+                          "Dispatch fingerprint and output both identical to the baseline. "
+                          "The patch changed no decision the engine makes.",
+                          {"probe": pr})
+        if pr and pr["verdict"] == "will-fail-gate-2" and not args.bench_anyway:
+            return finish("probe", "would-fail-token-identity",
+                          f"Output differs on {pr['mismatchedPrompts']}. A bench would reject "
+                          f"this on gate 2. Re-run with --bench-anyway to measure it regardless.",
+                          {"probe": pr})
+
+    # ---- 2. bench: paired arms, gates 1, 2 and 4 ---------------------------
+    before = {p.name for p in (ROOT / "results").glob("*.json")}
+    bargs = argparse.Namespace(target=args.target, patch=args.patch, pairs=args.pairs)
+    try:
+        cmd_bench(bargs)
+    except SystemExit as e:
+        return finish("bench", "bench-failed", f"bench exited with {e.code}")
+    new = [p for p in (ROOT / "results").glob("*.json") if p.name not in before]
+    if not new:
+        return finish("bench", "bench-failed", "bench wrote no record")
+    record = max(new, key=lambda p: p.stat().st_mtime)
+    rec = json.loads(record.read_text())
+    if not rec.get("promotable"):
+        why = []
+        g = rec.get("gates", {})
+        if not g.get("tokenIdentity"):
+            why.append("token identity failed")
+        if not g.get("speedupFloors"):
+            why.append("below the speedup floors")
+        if rec.get("score", 0) <= 1.0:
+            why.append(f"score {rec.get('score')} does not beat the incumbent")
+        return finish("bench", "rejected", "; ".join(why) or "not promotable",
+                      {"record": str(record.relative_to(ROOT)),
+                       "decodeSpeedup": rec.get("decodeSpeedup"),
+                       "prefillSpeedup": rec.get("prefillSpeedup"),
+                       "score": rec.get("score")})
+
+    # ---- 3. gate 3: held-out prompts, generated from a fresh seed ----------
+    hargs = argparse.Namespace(target=args.target, patch=args.patch, count=args.heldout_count,
+                               pairs=1, referee=args.referee,
+                               claimed_speedup=rec["decodeSpeedup"], seed=None)
+    try:
+        cmd_heldout(hargs)
+    except SystemExit as e:
+        return finish("heldout", "heldout-failed", f"heldout exited with {e.code}",
+                      {"record": str(record.relative_to(ROOT))})
+    hrecs = sorted((ROOT / "results" / args.target).glob("heldout-*.json"),
+                   key=lambda p: p.stat().st_mtime)
+    if not hrecs:
+        return finish("heldout", "heldout-failed", "heldout wrote no record")
+    hrec = json.loads(hrecs[-1].read_text())
+    if not hrec.get("passed"):
+        return finish("heldout", "rejected-held-out",
+                      "identical=%s generalizes=%s" % (hrec.get("identical"), hrec.get("generalizes")),
+                      {"record": str(record.relative_to(ROOT)),
+                       "heldOutRecord": str(hrecs[-1].relative_to(ROOT))})
+
+    if args.no_promote:
+        return finish("promote", "passed-not-promoted",
+                      "All gates passed. --no-promote was set, so the frontier is unchanged.",
+                      {"record": str(record.relative_to(ROOT)),
+                       "heldOutRecord": str(hrecs[-1].relative_to(ROOT)),
+                       "score": rec.get("score")})
+
+    # ---- 4. promote -------------------------------------------------------
+    prargs = argparse.Namespace(
+        target=args.target, record=str(record), held_out_record=str(hrecs[-1]),
+        author=args.author, author_name=args.author_name, model=args.model,
+        note=args.note, url=args.url, scope=args.scope, referee=args.referee,
+        also_moved=args.also_moved, force=False)
+    try:
+        cmd_promote(prargs)
+    except SystemExit as e:
+        return finish("promote", "promote-failed", f"promote exited with {e.code}",
+                      {"record": str(record.relative_to(ROOT))})
+    return finish("promote", "promoted", f"score {rec.get('score')}",
+                  {"record": str(record.relative_to(ROOT)),
+                   "heldOutRecord": str(hrecs[-1].relative_to(ROOT)),
+                   "score": rec.get("score"),
+                   "decodeSpeedup": rec.get("decodeSpeedup")})
+
+
 def cmd_leaderboard(args):
     target = load_target(args.target)
     lb = load_leaderboard(target, create=args.init)
@@ -1388,6 +1640,16 @@ def main():
     b.set_defaults(discard_first=True)
     b.set_defaults(fn=cmd_baseline)
 
+    pr = sub.add_parser("probe", help="ONE boot: did this patch change anything the engine does?")
+    pr.add_argument("--target", required=True)
+    pr.add_argument("--patch", default=None, help="omit with --rebaseline to record the baseline only")
+    pr.add_argument("--prompts", type=int, default=2,
+                    help="how many of the target's prompts to use; 2 is enough to catch a no-op")
+    pr.add_argument("--rebaseline", action="store_true",
+                    help="re-record the baseline fingerprint (do this when the pinned config changes)")
+    pr.add_argument("--allow-blocked", action="store_true")
+    pr.set_defaults(fn=cmd_probe)
+
     w = sub.add_parser("warm", help="compile every prompt shape's kernels into the "
                                     "on-disk cache; required before baselining a TP target")
     w.add_argument("--target", required=True)
@@ -1421,6 +1683,28 @@ def main():
                     help="path to a passing `heldout` record (gate 3: identity AND speedup)")
     p_.add_argument("--force", action="store_true")
     p_.set_defaults(fn=cmd_promote)
+
+    a = sub.add_parser("attempt", help="probe -> bench -> heldout -> promote, unattended")
+    a.add_argument("--target", required=True)
+    a.add_argument("--patch", required=True)
+    a.add_argument("--author", required=True, help="GitHub handle of the contributor")
+    a.add_argument("--author-name", default=None)
+    a.add_argument("--model", default=None, help="the model that wrote it, if any")
+    a.add_argument("--note", default=None)
+    a.add_argument("--url", default=None)
+    a.add_argument("--scope", choices=["engine-general", "model-specific"], default="model-specific")
+    a.add_argument("--also-moved", nargs="*", default=None)
+    a.add_argument("--referee", default=None)
+    a.add_argument("--pairs", type=int, default=None)
+    a.add_argument("--heldout-count", type=int, default=6)
+    a.add_argument("--skip-probe", action="store_true",
+                   help="go straight to the bench. Only for a change whose effect is already known.")
+    a.add_argument("--bench-anyway", action="store_true",
+                   help="bench even when the probe predicts a gate-2 failure, to measure the cost")
+    a.add_argument("--no-promote", action="store_true",
+                   help="run every gate but leave the frontier alone")
+    a.add_argument("--allow-blocked", action="store_true")
+    a.set_defaults(fn=cmd_attempt)
 
     l = sub.add_parser("leaderboard", help="print the frontier and its promotion chain")
     l.add_argument("--target", required=True)

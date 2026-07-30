@@ -1,0 +1,25 @@
+{
+  "patch": null,
+  "at": "2026-07-30T18:28:34+00:00",
+  "bootSeconds": 235.5,
+  "prompts": [
+    {
+      "id": "a-code-short",
+      "sha256": "efc4efe865b11fa596c30f6602a3c2fdcf3c567673e58d058d78ca58754f3f64",
+      "decodeTps": 12.287
+    },
+    {
+      "id": "b-prose-short",
+      "sha256": "f1ed7adadcdd40091af0f2fd97078247de8ab402e2609f8c24590739c3b8d408",
+      "decodeTps": 12.275
+    }
+  ],
+  "fingerprint": [
+    "Detected ModelOpt MXFP8 checkpoint",
+    "Detected ModelOpt NVFP4 checkpoint",
+    "Detected ModelOpt fp8 checkpoint",
+    "does not have native support for FP4"
+  ],
+  "applied": [],
+  "decodeTps": 12.281
+}

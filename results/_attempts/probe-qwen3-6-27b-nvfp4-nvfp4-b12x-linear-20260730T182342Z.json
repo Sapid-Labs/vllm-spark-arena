@@ -1,0 +1,19 @@
+{
+  "contractVersion": 1,
+  "kind": "probe",
+  "target": "qwen3-6-27b-nvfp4",
+  "patch": "nvfp4-b12x-linear",
+  "at": "2026-07-30T18:23:42+00:00",
+  "node": "spark-05cc",
+  "verdict": "inconclusive",
+  "signalsAdded": [
+    "[arena nvfp4-b12x-linear] inserted FlashInferB12xNvFp4LinearKernel at position 1; order is now ['FlashInferCuteDslNvFp4LinearKernel', 'FlashInferB12xNvFp4LinearKernel', 'FlashInferCutlassNvFp4LinearKernel', 'CutlassNvFp4LinearKernel', 'MarlinNvFp4LinearKernel', 'FlashInferTrtllmNvFp4LinearKernel', 'FlashInferCudnnNvFp4LinearKernel', 'FbgemmNvFp4LinearKernel', 'EmulationNvFp4LinearKernel', 'HummingNvFp4LinearKernel']"
+  ],
+  "signalsRemoved": [],
+  "mismatchedPrompts": [],
+  "baselineDecodeTps": 12.311,
+  "candidateDecodeTps": 12.286000000000001,
+  "oneBootRatio": 0.998,
+  "note": "A probe is a filter, never a score. Only the paired bench measures.",
+  "baselineProbeAt": "2026-07-30T18:19:46+00:00"
+}
