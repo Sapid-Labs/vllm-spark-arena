@@ -241,9 +241,10 @@
       "sudo iptables -A OUTPUT -m owner --uid-owner arena-run -j REJECT",
       "printf '%s ALL=(arena-run) NOPASSWD: ALL\\n' \"$USER\" | sudo tee /etc/sudoers.d/arena-run",
       "sudo chmod 0440 /etc/sudoers.d/arena-run",
-      "sudo netfilter-persistent save    # so the rule survives a reboot"
+      "sudo apt-get install -y iptables-persistent    # NOT installed on this fleet by default",
+      "sudo netfilter-persistent save                 # so the rule survives a reboot"
     ],
-    "setupNote": "The UID needs read access to the venv and the model files. Both live under the operator's home directory, so either relax that directory or place the arena tree somewhere both users can read. `arena.py sandbox --check` reports which of these is missing.",
+    "setupNote": "The UID needs read access to the venv and the model files. Both live under the operator's home directory, so either relax that directory or place the arena tree somewhere both users can read. `arena.py sandbox --check` reports which of these is missing. Run this on every node that will run a single-node arm. Today that is only the head node -- both wheel-substrate targets were baselined on spark-05cc -- but nothing pins a target to a node, and the guard refuses on whichever node lacks the setup. The same UID serves both arenas, so the step is once per node, not once per arena.",
     "verify": "python3 harness/arena.py sandbox --check",
     "onVerifyFail": "The harness REFUSES to run a candidate arm. It does not warn and continue. An unverified sandbox is the same as no sandbox, and a score produced without one is not a score anyone should trust. Baseline arms are unaffected -- that code is ours.",
     "probeNote": "The check is an active egress attempt, not an inspection of the firewall rules. mlx.fast does the same thing: a workflow step that CONFIRMS the sandbox denies network, rather than assuming it. A rule that exists and does not work is the failure mode worth catching.",
